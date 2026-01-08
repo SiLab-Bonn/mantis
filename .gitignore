@@ -1,7 +1,5 @@
 #debugging and data  files
-test.ipynb
 *.h5
-!aidatlu/test/fixtures/*
 .vscode
 
 # Byte-compiled / optimized / DLL files

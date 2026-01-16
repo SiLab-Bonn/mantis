@@ -1,3 +1,3 @@
-# Data reciever
+# Data receiver
 
-# recieves data from zmq adress
+# receives data from zmq address

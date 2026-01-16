@@ -1,4 +1,4 @@
-# scan configurations 
+# scan configurations
 [general]
 readout_system = ""
 output_directory = "/mnt/data/test"
@@ -9,15 +9,15 @@ stop_column = 224
 start_row = 0
 stop_row = 512
 
-scan_timeout = false # Timeout for scan after which the scan will be stopped, in seconds; if False no limit on scan time
-max_triggers = 1000000 # Number of maximum received triggers after stopping readout, if False no limit on received trigger
+scan_timeout = 10 # Timeout for scan after which the scan will be stopped, in seconds; if False no limit on scan time
+max_triggers = false # Number of maximum received triggers after stopping readout, if False no limit on received trigger
 tot_calib_file = ""
 
 [modules]
 [modules.module_0]
 identifier = "unknown"
 [modules.module_0.chip_0]
-chip_sn = "W18R05"
+chip_sn = "W20R05"
 chip_id = 0
 receiver = "rx0"
 chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists
@@ -30,7 +30,7 @@ send_data = "tcp://127.0.0.1:5500"
 # chip_id = 1
 # receiver = "rx1"
 # chip_config_file = ""
-# record_chip_status = true 
+# record_chip_status = true
 # use_good_pixels_diff = false
 # send_data = "tcp://127.0.0.1:6500"
 

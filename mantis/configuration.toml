@@ -17,7 +17,7 @@ tot_calib_file = ""
 [modules.module_0]
 identifier = "unknown"
 [modules.module_0.chip_0]
-chip_sn = "W20R05"
+chip_sn = "W18R05"
 chip_id = 0
 receiver = "rx0"
 chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists

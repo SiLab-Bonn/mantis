@@ -1,60 +1,93 @@
-import threading
 import toml
 from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
 
-DEFAULT_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/configuration.toml"
+FIXED_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/fixed_configuration.toml"
+USER_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/user_configuration.toml"
+
+
+def load_config(fixed_file, user_file):
+    fixed = toml.load(fixed_file)
+    user = toml.load(user_file)
+
+    cfg = fixed.copy()
+
+    # Shallow-merge user config (user overrides fixed)
+    for key, value in user.items():
+        if isinstance(value, dict) and key in cfg:
+            cfg[key].update(value)
+        else:
+            cfg[key] = value
+
+    # Apply chip defaults
+    chip_defaults = cfg.get("chip_defaults", {})
+    modules = cfg.get("modules", {})
+
+    for module in modules.values():
+        for name, chip in module.items():
+            if name.startswith("chip_"):
+                for k, v in chip_defaults.items():
+                    chip.setdefault(k, v)
+
+    return cfg
 
 
 class TJ_Control:
-    def __init__(self, config_file=None):
-        if config_file is None:
-            config_file = DEFAULT_CONFIG_FILE
-
-        self.config_path = config_file
-
-        with open(self.config_path) as f:
-            tab = toml.load(f)
-
-        self.testbench = tab
-        self.scan_conf = tab["scan_configuration"]
-
-        self.thread = None
+    def __init__(self, user_config_file=None):
+        self.user_config_file = user_config_file or USER_CONFIG_FILE
+        self.load_config()
         self.scan_ext = None
 
+    def load_config(self):
+        self.testbench = load_config(FIXED_CONFIG_FILE, self.user_config_file)
+        self.scan_conf = self.testbench["scan_configuration"]
+
     def configure(self):
-        # reload file to apply possible changes in between
-        with open(self.config_path) as f:
-            tab = toml.load(f)
-
-        self.testbench = tab
-        self.scan_conf = tab["scan_configuration"]
-
-        # print("Updated Configuration:", tab["scan_configuration"], tab["modules"])
+        """Reload config and reconfigure scan if needed."""
+        self.load_config()
 
         if self.scan_ext is not None:
             self.scan_ext.configuration["scan"] = self.scan_conf
             self.scan_ext.configure()
 
     def initialize(self):
-        # TJ.stop()
-        self.scan_ext = ExtTriggerScan(
-            bench_config=self.testbench, scan_config=self.scan_conf
-        )
-        self.scan_ext.init()
+        try:
+            self.shutdown()
+            self.scan_ext = ExtTriggerScan(
+                bench_config=self.testbench, scan_config=self.scan_conf
+            )
+            self.scan_ext.init()
+        except Exception as e:
+            print("Initialization failed:", e)
+            self.scan_ext = None
+            raise
+
+    # need to shut down before initializing (again) to clear occupied socket connections
+    def shutdown(self):
+        try:
+            if self.scan_ext:
+                try:
+                    self.scan_ext.stop_scan.set()
+                except Exception:
+                    pass
+
+                try:
+                    self.scan_ext.close()
+                except Exception as e:
+                    print("Warning: close failed:", e)
+
+        except Exception as e:
+            print("Shutdown error:", e)
+
+        self.scan_ext = None
 
     def start_scan(self):
-        if self.thread and self.thread.is_alive():
-            print("Scan already running")
+        if not self.scan_ext:
+            print("Not initialized")
             return
 
         self.scan_ext.stop_scan.clear()
-        self.thread = threading.Thread(target=self.scan_ext.scan, daemon=True)
-        self.thread.start()
+        self.scan_ext.scan()
 
     def stop_scan(self):
         if self.scan_ext:
             self.scan_ext.stop_scan.set()
-
-        if self.thread:
-            self.thread.join()
-            self.thread = None

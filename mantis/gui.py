@@ -4,24 +4,83 @@
 # buttons to click (start, configure, stop, restart, power cycle) and live plots to admire (hitmap, correlation...)
 # data is should be handled separately to gui in some kind of interpreter
 
+
 import sys
 import toml
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import (
     QApplication,
-    QFileDialog,
-    QFrame,
-    QLabel,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QPlainTextEdit,
+    QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QPushButton,
+    QPlainTextEdit,
+    QLabel,
+    QProgressBar,
+    QFileDialog,
+    QMessageBox,
     QStackedWidget,
-    QWidget,
+    QFrame,
 )
 from tj_interface import TJ_Control
+
+
+class StyledButton(QPushButton):
+    def __init__(self, text, color="green"):
+        super().__init__(text)
+        self.default_color = color
+        self.set_color(color)
+
+    # viridis colors
+    def set_color(self, color):
+        themes = {
+            "yellow": "rgba(253, 231, 37, 0.5)",
+            "green": "rgba(122, 209, 81, 0.5)",
+            "mint": "rgba(34, 168, 132, 0.5)",
+            "lightblue": "rgba(42, 120, 142, 0.5)",
+            "darkblue": "rgba(65, 68, 135, 0.5)",
+            "purple": "rgba(68, 1, 84, 0.5)",
+            "grey": "rgba(159, 161, 164, 0.5)",
+        }
+
+        bg = themes.get(color, color)
+        self.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {bg};
+                color: black;
+                border: 2px solid black;
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            """
+        )
+
+    def set_busy(self):
+        self.set_color("grey")
+        QApplication.processEvents()
+
+    def set_ready(self):
+        self.set_color(self.default_color)
+        QApplication.processEvents()
+
+
+# Run functions in background - threading
+class Worker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(Exception)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.fn()
+        except Exception as e:
+            self.error.emit(e)
+            return
+        self.finished.emit()
 
 
 class ScanControl(QWidget):
@@ -29,81 +88,92 @@ class ScanControl(QWidget):
         super().__init__()
         self.TJ = controller
 
-        self.setWindowTitle("TJ Scan Control")
-
         layout = QVBoxLayout()
 
-        # Buttons
-        self.initialize_btn = QPushButton("Initialize")
-        self.conf_btn = QPushButton("Configure")
-        self.start_btn = QPushButton("Start Scan")
-        self.stop_btn = QPushButton("Stop Scan")
+        # Button specification format:
+        # (
+        #     "Internal attribute name",   # how the button is stored on the class (self.btn_start)
+        #     "Visible label",             # text shown on the button
+        #     "Color name",                # passed to StyledButton for theming
+        #     CallbackFunction             # function executed when the button is clicked, including threading if necessary
+        # )
+        button_specs = [
+            (
+                "btn_initialize",
+                "Initialize",
+                "green",
+                lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize),
+            ),
+            (
+                "btn_conf",
+                "Configure",
+                "green",
+                lambda: self.run_in_thread(self.TJ.configure, self.btn_conf),
+            ),
+            (
+                "btn_start",
+                "Start Scan",
+                "green",
+                lambda: self.run_in_thread(self.TJ.start_scan, self.btn_start),
+            ),
+            ("btn_stop", "Stop Scan", "green", lambda: self.TJ.stop_scan()),
+        ]
 
-        layout.addWidget(self.initialize_btn)
-        layout.addWidget(self.conf_btn)
-        layout.addWidget(self.start_btn)
-        layout.addWidget(self.stop_btn)
+        self.buttons = {}
+
+        for attr_name, label, color, callback in button_specs:
+            btn = StyledButton(label, color=color)
+            self.buttons[attr_name] = btn
+            setattr(self, attr_name, btn)
+            btn.clicked.connect(callback)
+            layout.addWidget(btn)
 
         # Terminal
         self.terminal = QPlainTextEdit()
         self.terminal.setReadOnly(True)
-        self.terminal.setMaximumBlockCount(5000)
         layout.addWidget(self.terminal)
+
+        # Progress bar
+        self.status_label = QLabel("Progress Bar")
+        layout.addWidget(self.status_label)
+
+        self.progress = QProgressBar()
+        self.progress.setMinimum(0)
+        layout.addWidget(self.progress)
 
         self.setLayout(layout)
 
         self._stdout = sys.stdout
         sys.stdout = self
 
-        # Status label
-        self.status_label = QLabel("Progress Bar")
-        layout.addWidget(self.status_label)
-
-        # Progress bar
-        self.progress = QProgressBar()
-        self.progress.setMinimum(0)
-        layout.addWidget(self.progress)
-
-        # Connect buttons
-        self.initialize_btn.clicked.connect(self.initialize)
-        self.conf_btn.clicked.connect(self.configure)
-        self.start_btn.clicked.connect(self.start_scan)
-        self.stop_btn.clicked.connect(self.stop_scan)
-
-        # Timer to update GUI
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_gui)
         self.timer.start(200)
 
-    # Def actions for buttons
-    def initialize(self):
-        self.TJ.initialize()
-        self.log("Initialization complete")
+    def run_in_thread(self, fn, button):
+        button.set_busy()
 
-    def start_scan(self):
-        self.TJ.start_scan()
+        thread = QThread()
+        worker = Worker(fn)
 
-    def stop_scan(self):
-        self.TJ.stop_scan()
+        # Keep references so they are not destroyed early
+        if not hasattr(self, "threads"):
+            self.threads = []
+        self.threads.append(thread)
+        self.threads.append(worker)
 
-    def configure(self):
-        # filename, _ = QFileDialog.getOpenFileName(
-        #     self, "Select new config file", "", "TOML Files (*.toml)"
-        # )
-        # if filename:
-        #     self.TJ.configure(filename)
-        self.TJ.configure()
-        self.log("Configuration complete")
+        worker.moveToThread(thread)
 
-    # GUI update loop
+        thread.started.connect(worker.run)
+        worker.error.connect(lambda e: self.handle_error(e, button))
+        worker.finished.connect(lambda: button.set_ready())
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self.threads.remove(thread))
+        thread.start()
+
     def update_gui(self):
-        # Update status
-        if self.TJ.thread and self.TJ.thread.is_alive():
-            self.status_label.setText("Scan running")
-        else:
-            self.status_label.setText("")
-
-        # Update progress bar
         if self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
             try:
                 total = self.TJ.scan_ext.pbar.total
@@ -112,6 +182,17 @@ class ScanControl(QWidget):
                 self.progress.setValue(current)
             except Exception:
                 pass
+
+        if self.TJ.scan_ext and self.TJ.scan_ext.stop_scan.is_set():
+            self.status_label.setText("Scan stopped")
+        elif self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
+            self.status_label.setText("Scan running")
+        else:
+            self.status_label.setText("")
+
+    def handle_error(self, e, button):
+        self.terminal.appendPlainText(f"ERROR: {e}")
+        button.set_ready()
 
     def log(self, text):
         self.terminal.appendPlainText(text)
@@ -124,7 +205,7 @@ class ScanControl(QWidget):
         pass
 
 
-class OnlineMonitor(QWidget):  # tbc
+class OnlineMonitor(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout()
@@ -137,42 +218,54 @@ class Configuration(QWidget):
         super().__init__()
         layout = QVBoxLayout()
 
-        # Buttons
-        self.btn_load = QPushButton("Load Configuration")
-        self.btn_save = QPushButton("Save Configuration")
-        self.btn_revert = QPushButton("Revert Changes")
+        # Button specification format:
+        # (
+        #     "Internal attribute name",   # how the button is stored on the class (self.btn_load)
+        #     "Visible label",             # text shown on the button
+        #     "Color name",                # passed to StyledButton for theming
+        #     CallbackFunction             # function executed when the button is clicked
+        # )
+        button_specs = [
+            ("btn_load", "Load Configuration", "green", self.load_file),
+            ("btn_save", "Save Configuration", "green", self.save_file),
+            ("btn_revert", "Revert Changes", "green", self.revert),
+        ]
+
+        self.buttons = {}
+
+        for attr_name, label, color, callback in button_specs:
+            btn = StyledButton(label, color=color)
+            self.buttons[attr_name] = btn
+            setattr(self, attr_name, btn)
+            btn.clicked.connect(callback)
+            layout.addWidget(btn)
 
         # Text editor
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText("Load a TOML file to begin editing...")
-
-        layout.addWidget(self.btn_load)
-        layout.addWidget(self.btn_save)
-        layout.addWidget(self.btn_revert)
         layout.addWidget(self.editor)
 
         self.setLayout(layout)
-
-        self.btn_load.clicked.connect(self.load_file)
-        self.btn_save.clicked.connect(self.save_file)
-        self.btn_revert.clicked.connect(self.revert)
 
         self.current_path = None
         self.original_text = None
 
     def load_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select TOML file", "", "TOML Files (*.toml)"
+            self, "Select configuration file", "", "TOML Files (*.toml)"
         )
+
         if not path:
             return
 
         try:
             with open(path, "r") as f:
                 text = f.read()
+
             self.editor.setPlainText(text)
             self.current_path = path
             self.original_text = text
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
 
@@ -196,7 +289,7 @@ class Configuration(QWidget):
             QMessageBox.information(
                 self,
                 "Saved",
-                "Configuration saved successfully. \n Please Configure again to apply new Configuration.",
+                "Configuration saved successfully. \nPlease Configure again to apply new Configuration.",
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file:\n{e}")
@@ -212,45 +305,48 @@ class MainWindow(QWidget):
     def __init__(self, controller):
         super().__init__()
 
-        # Create pages
-        self.page1 = ScanControl(controller)
-        self.page2 = OnlineMonitor()
-        self.page3 = Configuration()
+        # Page specification format:
+        # (
+        #     "Internal name",     # key used to store the page's button (optional)
+        #     WidgetInstance,      # the actual QWidget that will be shown in the stack
+        #     "Sidebar label",     # text shown on the sidebar button
+        #     "ButtonColor"        # color passed to StyledButton for theming
+        # )
+        pages = [
+            ("ScanControl", ScanControl(controller), "Scan Control", "green"),
+            ("OnlineMonitor", OnlineMonitor(), "Online Monitor", "green"),
+            ("Configuration", Configuration(), "Configuration", "green"),
+        ]
 
-        # Stacked widget
         self.stack = QStackedWidget()
-        self.stack.addWidget(self.page1)
-        self.stack.addWidget(self.page2)
-        self.stack.addWidget(self.page3)
 
-        # Sidebar buttons
-        self.btn_SC = QPushButton("Scan Control")
-        self.btn_OM = QPushButton("Online Monitor")
-        self.btn_conf = QPushButton("Configuration")
+        self.sidebar_layout = QVBoxLayout()
 
-        self.btn_SC.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        self.btn_OM.clicked.connect(lambda: self.stack.setCurrentIndex(1))
-        self.btn_conf.clicked.connect(lambda: self.stack.setCurrentIndex(2))
-
-        # Collapsible toggle button
-        self.toggle_btn = QPushButton("⮜")
+        # Toggle button
+        self.toggle_btn = StyledButton("⮜", color="lightblue")
         self.toggle_btn.setFixedHeight(30)
         self.toggle_btn.clicked.connect(self.toggle_sidebar)
-
-        # Sidebar layout
-        self.sidebar_layout = QVBoxLayout()
         self.sidebar_layout.addWidget(self.toggle_btn)
-        self.sidebar_layout.addWidget(self.btn_SC)
-        self.sidebar_layout.addWidget(self.btn_OM)
-        self.sidebar_layout.addWidget(self.btn_conf)
+
+        # sidebar buttons and pages
+        self.sidebar_buttons = {}
+
+        for index, (attr_name, widget, label, color) in enumerate(pages):
+            self.stack.addWidget(widget)
+
+            btn = StyledButton(label, color=color)
+            self.sidebar_buttons[attr_name] = btn
+            btn.clicked.connect(lambda _, i=index: self.stack.setCurrentIndex(i))
+
+            self.sidebar_layout.addWidget(btn)
+
         self.sidebar_layout.addStretch()
 
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setLayout(self.sidebar_layout)
-
         self.sidebar_widget.setFixedWidth(150)
 
-        # Vertical separator line
+        # Vertical separator
         line = QFrame()
         line.setFrameShape(QFrame.Shape.VLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
@@ -264,26 +360,26 @@ class MainWindow(QWidget):
         self.setLayout(layout)
         self.setWindowTitle("MANTIS Control")
 
-        # Track collapsed state
         self.sidebar_collapsed = False
+        self.sidebar_width = 150
 
-    # Collapse / Expand Sidebar
     def toggle_sidebar(self):
         if self.sidebar_collapsed:
-            # Expand
             self.sidebar_widget.setFixedWidth(self.sidebar_width)
             self.toggle_btn.setText("⮜")
-            self.btn_SC.show()
-            self.btn_OM.show()
-            self.btn_conf.show()
+
+            for btn in self.sidebar_buttons.values():
+                btn.show()
+
             self.sidebar_collapsed = False
+
         else:
-            # Collapse
             self.sidebar_widget.setFixedWidth(40)
             self.toggle_btn.setText("⮞")
-            self.btn_SC.hide()
-            self.btn_OM.hide()
-            self.btn_conf.hide()
+
+            for btn in self.sidebar_buttons.values():
+                btn.hide()
+
             self.sidebar_collapsed = True
 
 

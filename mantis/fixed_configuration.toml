@@ -1,38 +1,13 @@
-# scan configurations
+# fixed scan configurations
+[chip_defaults]
+record_chip_status = true
+use_good_pixels_diff = false
+
 [general]
 readout_system = ""
-output_directory = "/mnt/data/test"
 
 [scan_configuration]
-start_column = 0
-stop_column = 224
-start_row = 0
-stop_row = 512
-
-scan_timeout = 10 # Timeout for scan after which the scan will be stopped, in seconds; if False no limit on scan time
-max_triggers = false # Number of maximum received triggers after stopping readout, if False no limit on received trigger
 tot_calib_file = ""
-
-[modules]
-[modules.module_0]
-identifier = "unknown"
-[modules.module_0.chip_0]
-chip_sn = "W18R05"
-chip_id = 0
-receiver = "rx0"
-chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists
-record_chip_status = true # Add chip statuses to the output files after the scan (link errors and powering infos)
-use_good_pixels_diff = false
-send_data = "tcp://127.0.0.1:5500"
-
-# [modules.module_0.chip_1]
-# chip_sn = "W14R13"
-# chip_id = 1
-# receiver = "rx1"
-# chip_config_file = ""
-# record_chip_status = true
-# use_good_pixels_diff = false
-# send_data = "tcp://127.0.0.1:6500"
 
 [TLU]
 TRIGGER_MODE = 3 # Selecting trigger mode: Use trigger inputs/trigger select (0), TLU no handshake (1), TLU simple handshake (2), TLU data handshake (3)

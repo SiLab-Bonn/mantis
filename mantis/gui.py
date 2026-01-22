@@ -90,34 +90,28 @@ class ScanControl(QWidget):
 
         layout = QVBoxLayout()
 
+        # fmt: off
         # Button specification format:
         # (
         #     "Internal attribute name",   # how the button is stored on the class (self.btn_start)
         #     "Visible label",             # text shown on the button
         #     "Color name",                # passed to StyledButton for theming
         #     CallbackFunction             # function executed when the button is clicked, including threading if necessary
+        #     Message                      # Message to be shown after operation is completed
         # )
         button_specs = [
-            (
-                "btn_initialize",
-                "Initialize",
-                "green",
-                lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize),
-            ),
-            ("btn_conf", "Configure", "green", lambda: self.configure_clicked()),
-            (
-                "btn_start",
-                "Start Scan",
-                "green",
-                lambda: self.run_in_thread(self.TJ.start_scan, self.btn_start),
-            ),
-            ("btn_stop", "Stop Scan", "green", lambda: self.TJ.stop_scan()),
+            ("btn_initialize","Initialize","green",lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize), "Initialization complete"),
+            ("btn_conf","Configure","green",lambda: self.configure_clicked(), "Configuration complete"), # threading separately, because config loading, which cannot be threaded
+            ("btn_start","Start Scan","green",lambda: self.run_in_thread(self.TJ.start_scan, self.btn_start), "Scan complete"),
+            ("btn_stop", "Stop Scan", "green", lambda: (self.TJ.stop_scan(), self.terminal.appendPlainText("Scan stopped")), ""), # message printed separately, because no threading
         ]
+        # fmt: on
 
         self.buttons = {}
 
-        for attr_name, label, color, callback in button_specs:
+        for attr_name, label, color, callback, message in button_specs:
             btn = StyledButton(label, color=color)
+            btn.message = message
             self.buttons[attr_name] = btn
             setattr(self, attr_name, btn)
             btn.clicked.connect(callback)
@@ -161,6 +155,7 @@ class ScanControl(QWidget):
         thread.started.connect(worker.run)
         worker.error.connect(lambda e: self.handle_error(e, button))
         worker.finished.connect(lambda: button.set_ready())
+        worker.finished.connect(lambda: self.terminal.appendPlainText(button.message))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -218,6 +213,7 @@ class Configuration(QWidget):
         self.TJ = controller
         layout = QVBoxLayout()
 
+        # fmt: off
         # Button specification format:
         # (
         #     "Internal attribute name",   # how the button is stored on the class (self.btn_load)
@@ -230,6 +226,7 @@ class Configuration(QWidget):
             ("btn_save", "Save Configuration", "green", self.save_file),
             ("btn_revert", "Revert Changes", "green", self.revert),
         ]
+        # fmt: on
 
         self.buttons = {}
 
@@ -307,6 +304,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.TJ = controller
 
+        # fmt: off
         # Page specification format:
         # (
         #     "Internal name",     # key used to store the page's button (optional)
@@ -319,6 +317,7 @@ class MainWindow(QWidget):
             ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
             ("OnlineMonitor", OnlineMonitor(), "Online Monitor", "green"),
         ]
+        #  fmt: on
 
         self.stack = QStackedWidget()
 

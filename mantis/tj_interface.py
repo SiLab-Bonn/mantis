@@ -44,6 +44,9 @@ class TJ_Control:
     def configure(self):
         # Reload config and reconfigure scan if needed.
         self.load_config()
+        self.scan_ext._init_environment()
+        self.scan_ext._init_hardware(force=False)
+        self.scan_ext.initialized = True
 
         if self.scan_ext is not None:
             self.scan_ext.configuration["scan"] = self.scan_conf
@@ -55,7 +58,7 @@ class TJ_Control:
             self.scan_ext = ExtTriggerScan(
                 bench_config=self.testbench, scan_config=self.scan_conf
             )
-            self.scan_ext.init()
+            # self.scan_ext.init()
         except Exception as e:
             print("Initialization failed:", e)
             self.scan_ext = None
@@ -74,13 +77,15 @@ class TJ_Control:
                     self.scan_ext.close()
                 except Exception as e:
                     print("Warning: close failed:", e)
-
+            else:
+                pass
         except Exception as e:
             print("Shutdown error:", e)
 
         self.scan_ext = None
 
     def start_scan(self):
+        self.scan_ext._init_files()
         if not self.scan_ext:
             print("Not initialized")
             return

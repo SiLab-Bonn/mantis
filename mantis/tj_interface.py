@@ -42,7 +42,7 @@ class TJ_Control:
         self.scan_conf = self.testbench["scan_configuration"]
 
     def configure(self):
-        """Reload config and reconfigure scan if needed."""
+        # Reload config and reconfigure scan if needed.
         self.load_config()
 
         if self.scan_ext is not None:

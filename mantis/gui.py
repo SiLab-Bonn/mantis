@@ -104,12 +104,7 @@ class ScanControl(QWidget):
                 "green",
                 lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize),
             ),
-            (
-                "btn_conf",
-                "Configure",
-                "green",
-                lambda: self.run_in_thread(self.TJ.configure, self.btn_conf),
-            ),
+            ("btn_conf", "Configure", "green", lambda: self.configure_clicked()),
             (
                 "btn_start",
                 "Start Scan",
@@ -156,7 +151,6 @@ class ScanControl(QWidget):
         thread = QThread()
         worker = Worker(fn)
 
-        # Keep references so they are not destroyed early
         if not hasattr(self, "threads"):
             self.threads = []
         self.threads.append(thread)
@@ -190,6 +184,11 @@ class ScanControl(QWidget):
         else:
             self.status_label.setText("")
 
+    def configure_clicked(self):
+        self.TJ.load_config()
+
+        self.run_in_thread(self.TJ.configure, self.btn_conf)
+
     def handle_error(self, e, button):
         self.terminal.appendPlainText(f"ERROR: {e}")
         button.set_ready()
@@ -214,8 +213,9 @@ class OnlineMonitor(QWidget):
 
 
 class Configuration(QWidget):
-    def __init__(self):
+    def __init__(self, controller):
         super().__init__()
+        self.TJ = controller
         layout = QVBoxLayout()
 
         # Button specification format:
@@ -265,6 +265,7 @@ class Configuration(QWidget):
             self.editor.setPlainText(text)
             self.current_path = path
             self.original_text = text
+            self.TJ.user_config_file = path
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
@@ -304,6 +305,7 @@ class Configuration(QWidget):
 class MainWindow(QWidget):
     def __init__(self, controller):
         super().__init__()
+        self.TJ = controller
 
         # Page specification format:
         # (
@@ -313,9 +315,9 @@ class MainWindow(QWidget):
         #     "ButtonColor"        # color passed to StyledButton for theming
         # )
         pages = [
-            ("ScanControl", ScanControl(controller), "Scan Control", "green"),
+            ("Configuration", Configuration(self.TJ), "Configuration", "green"),
+            ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
             ("OnlineMonitor", OnlineMonitor(), "Online Monitor", "green"),
-            ("Configuration", Configuration(), "Configuration", "green"),
         ]
 
         self.stack = QStackedWidget()

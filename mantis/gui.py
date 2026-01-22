@@ -103,7 +103,7 @@ class ScanControl(QWidget):
             ("btn_initialize","Initialize","green",lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize), "Initialization complete"),
             ("btn_conf","Configure","green",lambda: self.configure_clicked(), "Configuration complete"), # threading separately, because config loading, which cannot be threaded
             ("btn_start","Start Scan","green",lambda: self.run_in_thread(self.TJ.start_scan, self.btn_start), "Scan complete"),
-            ("btn_stop", "Stop Scan", "green", lambda: (self.TJ.stop_scan(), self.terminal.appendPlainText("Scan stopped")), ""), # message printed separately, because no threading
+            ("btn_stop", "Stop Scan", "green", lambda: (self.TJ.stop_scan(), self.log("Scan stopped")), ""), # message printed separately, because no threading
         ]
         # fmt: on
 
@@ -155,7 +155,7 @@ class ScanControl(QWidget):
         thread.started.connect(worker.run)
         worker.error.connect(lambda e: self.handle_error(e, button))
         worker.finished.connect(lambda: button.set_ready())
-        worker.finished.connect(lambda: self.terminal.appendPlainText(button.message))
+        worker.finished.connect(lambda: self.log(button.message))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -185,7 +185,7 @@ class ScanControl(QWidget):
         self.run_in_thread(self.TJ.configure, self.btn_conf)
 
     def handle_error(self, e, button):
-        self.terminal.appendPlainText(f"ERROR: {e}")
+        self.log(f"ERROR: {e}")
         button.set_ready()
 
     def log(self, text):

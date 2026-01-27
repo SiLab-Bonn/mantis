@@ -173,7 +173,7 @@ class ScanControl(QWidget):
                 pass
 
         if self.TJ.scan_ext and self.TJ.scan_ext.stop_scan.is_set():
-            self.status_label.setText("Scan stopped")
+            self.status_label.setText("")
         elif self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
             self.status_label.setText("Scan running")
         else:
@@ -202,13 +202,6 @@ class ScanControl(QWidget):
 # class Powering(QWidget):
 #     def __init__(self):
 #         super().__init__()
-#         layout = QVBoxLayout()
-#         self.setLayout(layout)
-
-# class Tuning(QWidget):
-#     def __init__(self, controller):
-#         super().__init__()
-#         self.TJ = controller
 #         layout = QVBoxLayout()
 #         self.setLayout(layout)
 

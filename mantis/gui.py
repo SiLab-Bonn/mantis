@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QFrame,
 )
-from tj_interface import TJ_Control
+from mantis.tj_interface import TJ_Control
 
 
 class StyledButton(QPushButton):
@@ -93,11 +93,11 @@ class ScanControl(QWidget):
         # fmt: off
         # Button specification format:
         # (
-        #     "Internal attribute name",   # how the button is stored on the class (self.btn_start)
-        #     "Visible label",             # text shown on the button
-        #     "Color name",                # passed to StyledButton for theming
-        #     CallbackFunction             # function executed when the button is clicked, including threading if necessary
-        #     Message                      # Message to be shown after operation is completed
+        #   Internal attribute name:    # how the button is stored on the class (self.btn_start)
+        #   Visible label:              # text shown on the button
+        #   Color name:                 # passed to StyledButton for theming
+        #   Callback Function:          # function executed when the button is clicked, including threading if necessary
+        #   Message:                    # Message to be shown after operation is completed
         # )
         button_specs = [
             ("btn_initialize","Initialize","green",lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize), "Initialization complete"),
@@ -199,11 +199,24 @@ class ScanControl(QWidget):
         pass
 
 
+# class Powering(QWidget):
+#     def __init__(self):
+#         super().__init__()
+#         layout = QVBoxLayout()
+#         self.setLayout(layout)
+
+# class Tuning(QWidget):
+#     def __init__(self, controller):
+#         super().__init__()
+#         self.TJ = controller
+#         layout = QVBoxLayout()
+#         self.setLayout(layout)
+
+
 class OnlineMonitor(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Online Monitor"))
         self.setLayout(layout)
 
 
@@ -216,10 +229,10 @@ class Configuration(QWidget):
         # fmt: off
         # Button specification format:
         # (
-        #     "Internal attribute name",   # how the button is stored on the class (self.btn_load)
-        #     "Visible label",             # text shown on the button
-        #     "Color name",                # passed to StyledButton for theming
-        #     CallbackFunction             # function executed when the button is clicked
+        #   Internal attribute name:    # how the button is stored on the class (self.btn_start)
+        #   Visible label:              # text shown on the button
+        #   Color name:                 # passed to StyledButton for theming
+        #   Callback Function:          # function executed when the button is clicked
         # )
         button_specs = [
             ("btn_load", "Load Configuration", "green", self.load_file),
@@ -307,12 +320,14 @@ class MainWindow(QWidget):
         # fmt: off
         # Page specification format:
         # (
-        #     "Internal name",     # key used to store the page's button (optional)
-        #     WidgetInstance,      # the actual QWidget that will be shown in the stack
-        #     "Sidebar label",     # text shown on the sidebar button
-        #     "ButtonColor"        # color passed to StyledButton for theming
+        #   Internal name:      # key used to store the page's button (optional)
+        #   Widget Instance:    # the actual QWidget that will be shown in the stack
+        #   Sidebar label:      # text shown on the sidebar button
+        #   ButtonColor:        # color passed to StyledButton for theming
         # )
         pages = [
+            # ("Powering", Powering(), "Powering", "green"),
+            # ("Tuning", Tuning(self.TJ), "Tuning", "green"),
             ("Configuration", Configuration(self.TJ), "Configuration", "green"),
             ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
             ("OnlineMonitor", OnlineMonitor(), "Online Monitor", "green"),
@@ -384,7 +399,7 @@ class MainWindow(QWidget):
             self.sidebar_collapsed = True
 
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
 
     TJ = TJ_Control()
@@ -393,3 +408,7 @@ if __name__ == "__main__":
     gui.show()
 
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

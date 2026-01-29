@@ -1,0 +1,37 @@
+# converter :
+#     DUT:
+#         kind : interpreter
+#         frontend : tcp://127.0.0.1:5500
+#         backend : tcp://127.0.0.1:5600
+#         analyze_tdc : False  #  Enable interpretation of TDC words
+#         noisy_threshold : 3  # Pixels per readout above noisy_threshold * median occupancy
+#         rx_id : 0
+
+#     TJ2nd:
+#         kind : interpreter
+#         frontend : tcp://127.0.0.1:6500
+#         backend : tcp://127.0.0.1:6600
+#         analyze_tdc : False  #  Enable interpretation of TDC words
+#         noisy_threshold : 3  # Pixels per readout above noisy_threshold * median occupancy
+#         rx_id : 1
+
+# receiver :
+#     DUT :
+#         kind : receiver
+#         frontend : tcp://127.0.0.1:5600
+#     TJ2nd :
+#         kind : receiver
+#         frontend : tcp://127.0.0.1:6600
+
+
+producer_sim:
+    DUT :
+        kind : silab_default_producer
+        backend : tcp://127.0.0.1:5501
+        delay : 0.01
+        data_file : /mnt/data/Str_Measurements_202511/251121/module_0/chip_0/20251121_135902_source_scan.h5
+    TJ2nd :
+        kind : silab_default_producer
+        backend : tcp://127.0.0.1:6501
+        delay : 0.01
+        data_file : /mnt/data/Str_Measurements_202511/251121/module_0/chip_1/20251121_135902_source_scan.h5

@@ -148,12 +148,8 @@ class RawDataInterpreter(object):
         return hit_data
 
     def reset(self):
-        self.hist_occ[:] = (
-            0  # np.zeros((512, 512, self.n_scan_params), dtype=numba.uint32)
-        )
-        self.hist_tot[:] = (
-            0  # np.zeros((512, 512, self.n_scan_params, 128), dtype=numba.uint16)
-        )
+        self.hist_occ[:] = 0
+        self.hist_tot[:] = 0
         self.hist_tdc[:] = 0  # np.zeros(4096, dtype=numba.uint32)
         self.n_triggers = 0
         self.n_tdc = 0

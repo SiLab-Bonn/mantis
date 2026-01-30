@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import (
 from mantis.tj_interface import TJ_Control
 from mantis.online_monitor import OnlineMonitor
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 
@@ -217,25 +219,83 @@ class MonitorView(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        # fmt: off
+        # Button specification format:
+        # (
+        #   Internal attribute name:    # how the button is stored on the class (self.btn_start)
+        #   Visible label:              # text shown on the button
+        #   Color name:                 # passed to StyledButton for theming
+        #   Callback Function:          # function executed when the button is clicked, including threading if necessary
+        # )
+        button_specs = [
+            ("btn_reset","Reset","green", lambda: (self.reset())),
+        ]
+        # fmt: on
+
+        self.buttons = {}
+
+        for attr_name, label, color, callback in button_specs:
+            btn = StyledButton(label, color=color)
+            self.buttons[attr_name] = btn
+            setattr(self, attr_name, btn)
+            btn.clicked.connect(callback)
+            layout.addWidget(btn)
+
         # Backend logic
         self.monitor = OnlineMonitor(self.TJ.user_config_file)
+        num = self.monitor.num_chips
+        chip_names = self.monitor.chip_sn
+
+        # --- Auto grid layout (near-square) ---
+        import math
+
+        ncols = math.ceil(math.sqrt(num))
+        nrows = math.ceil(num / ncols)
 
         # Create figure + subplots
-        self.fig, self.axes = plt.subplots(
-            1, self.monitor.num_chips, figsize=(6 * self.monitor.num_chips, 6)
-        )
+        self.fig, self.axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows))
 
-        if self.monitor.num_chips == 1:
-            self.axes = [self.axes]
+        # Add spacing between plots
+        self.fig.subplots_adjust(hspace=0.4, wspace=0.3)
 
+        # Flatten axes for easy iteration
+        self.axes = np.array(self.axes).reshape(-1)
+
+        # No hit white redefinition
+        vir = plt.cm.get_cmap("viridis", 256)
+        vir_colors = vir(np.linspace(0, 1, 256))
+        vir_colors[0] = [1, 1, 1, 1]  # RGBA
+        viridis_white_zero = mcolors.ListedColormap(vir_colors)
+
+        # Create hitmaps
         self.imgs = []
-        for ax in self.axes:
-            img = ax.imshow(np.zeros((100, 100)), cmap="hot", interpolation="nearest")
+        for i, ax in enumerate(self.axes[:num]):
+            img = ax.imshow(
+                np.zeros((512, 512)).T,
+                cmap=viridis_white_zero,
+                interpolation="nearest",
+                origin="lower",
+                extent=[1, 512, 1, 512],
+                aspect="equal",
+            )
+
+            # --- Create a colorbar axis with matching height ---
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.1)
+            self.fig.colorbar(img, cax=cax)
+
+            # Ticks
+            ax.set_xticks([1, 112, 224, 336, 448, 512])
+            ax.set_yticks([1, 112, 224, 336, 448, 512])
+
             self.imgs.append(img)
-            self.fig.colorbar(img, ax=ax)
-            ax.set_title("Hitmap")
+            ax.set_title(f"Hitmap – {chip_names[i]}")
             ax.set_xlabel("Column")
             ax.set_ylabel("Row")
+
+        # Hide unused axes
+        for ax in self.axes[num:]:
+            ax.set_visible(False)
 
         # Embed into Qt
         self.canvas = FigureCanvas(self.fig)
@@ -252,12 +312,23 @@ class MonitorView(QWidget):
         for list_index in range(self.monitor.num_chips):
             occ = self.monitor.process_receiver(list_index)
             if occ is not None:
-                self.imgs[list_index].set_data(occ)
+                self.imgs[list_index].set_data(occ.T)  # swap x/y
                 self.imgs[list_index].set_clim(vmin=0, vmax=occ.max())
                 updated = True
 
         if updated:
             self.canvas.draw_idle()
+
+    def reset(self):
+        # Reset backend accumulation
+        self.monitor.reset_occupancy()
+
+        # Reset the displayed hitmaps to zero
+        for img in self.imgs:
+            img.set_data(np.zeros((100, 100)).T)
+            img.set_clim(vmin=0, vmax=1)
+
+        self.canvas.draw_idle()
 
 
 class Configuration(QWidget):

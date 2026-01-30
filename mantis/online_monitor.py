@@ -21,7 +21,7 @@ class OnlineMonitor:
         self.config_file = config_file
 
         # Load frontends + rx_ids
-        self.frontends, self.rx_ids = self.load_config()
+        self.frontends, self.rx_ids, self.chip_sn = self.load_config()
         self.num_chips = len(self.frontends)
 
         # Per-receiver buffers
@@ -38,6 +38,7 @@ class OnlineMonitor:
 
         frontends = []
         rx_ids = []
+        self.chip_sn = []
 
         modules = cfg.get("modules", {})
 
@@ -46,6 +47,7 @@ class OnlineMonitor:
                 if key.startswith("chip_"):
                     fe = entry.get("send_data")
                     rx_str = entry.get("receiver")
+                    csn = entry.get("chip_sn")
 
                     if isinstance(rx_str, str) and rx_str.startswith("rx"):
                         rx_id = int(rx_str[2:])
@@ -55,8 +57,9 @@ class OnlineMonitor:
                     if fe is not None:
                         frontends.append(fe)
                         rx_ids.append(rx_id)
+                        self.chip_sn.append(csn)
 
-        return frontends, rx_ids
+        return frontends, rx_ids, self.chip_sn
 
     def setup_receivers(self):
         for list_index, fe in enumerate(self.frontends):
@@ -96,3 +99,8 @@ class OnlineMonitor:
 
         self.total_occupancy[list_index] += occ
         return self.total_occupancy[list_index]
+
+    def reset_occupancy(self):
+        self.total_occupancy = [None] * self.num_chips
+        # Also reset last_processed so new packets are processed again
+        self.last_processed = [-1] * self.num_chips

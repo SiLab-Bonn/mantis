@@ -1,11 +1,8 @@
 # %gui qt
-from receiver import TJReceiver
+from mantis.receiver import TJReceiver
 from mantis.mini_interpreter import RawDataInterpreter
-from PyQt6 import QtCore
-from PyQt6.QtWidgets import QApplication
 import numpy as np
-import matplotlib.pyplot as plt
-# %matplotlib qt
+import toml
 
 hit_dtype = np.dtype(
     [
@@ -16,91 +13,86 @@ hit_dtype = np.dtype(
     ]
 )
 
-frontends = ["tcp://127.0.0.1:5501", "tcp://127.0.0.1:6501"]
-# frontends need to be taken from config file
-
-app = QApplication.instance() or QApplication([])
-
-num_chips = len(frontends)
-
-fig, axes = plt.subplots(1, num_chips, figsize=(6 * num_chips, 6))
-
-imgs = []
-for ax in axes:
-    img = ax.imshow(np.zeros((100, 100)), cmap="hot", interpolation="nearest")
-    imgs.append(img)
-    fig.colorbar(img, ax=ax)
-    ax.set_title("TJ-Monopix2 Hitmap")
-    ax.set_xlabel("Column")
-    ax.set_ylabel("Row")
-    fig.show()
+USER_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/user_configuration.toml"
 
 
 class OnlineMonitor:
-    def __init__(self, img, rx_id):
-        self.img = img
-        self.rx_id = rx_id
-        self.received_data = []
-        self.total_occupancy = None
-        self.last_processed = -1
+    def __init__(self, config_file):
+        self.config_file = config_file
 
-    def handle_data(self, data):
-        self.received_data.append(data)
+        # Load frontends + rx_ids
+        self.frontends, self.rx_ids = self.load_config()
+        self.num_chips = len(self.frontends)
 
-    def make_hitmap(self, raw_data, rx_id=0):
-        interpreter = RawDataInterpreter(rx_id=self.rx_id)
+        # Per-receiver buffers
+        self.received_data = [[] for _ in range(self.num_chips)]
+        self.total_occupancy = [None] * self.num_chips
+        self.last_processed = [-1] * self.num_chips
+
+        # Receivers
+        self.receivers = []
+        self.setup_receivers()
+
+    def load_config(self):
+        cfg = toml.load(self.config_file)
+
+        frontends = []
+        rx_ids = []
+
+        modules = cfg.get("modules", {})
+
+        for module_name, module_data in modules.items():
+            for key, entry in module_data.items():
+                if key.startswith("chip_"):
+                    fe = entry.get("send_data")
+                    rx_str = entry.get("receiver")
+
+                    if isinstance(rx_str, str) and rx_str.startswith("rx"):
+                        rx_id = int(rx_str[2:])
+                    else:
+                        rx_id = None
+
+                    if fe is not None:
+                        frontends.append(fe)
+                        rx_ids.append(rx_id)
+
+        return frontends, rx_ids
+
+    def setup_receivers(self):
+        for list_index, fe in enumerate(self.frontends):
+            receiver = TJReceiver(frontend=fe)
+            receiver.worker.data.connect(
+                lambda data, idx=list_index: self.handle_data(idx, data)
+            )
+            receiver.start()
+            self.receivers.append(receiver)
+
+    def handle_data(self, list_index, data):
+        self.received_data[list_index].append(data)
+
+    def make_hitmap(self, raw_data, rx_id):
+        interpreter = RawDataInterpreter(rx_id=rx_id)
         hit_buffer = np.zeros(4 * len(raw_data), dtype=hit_dtype)
-        hits = interpreter.interpret(raw_data, hit_buffer)  # noqa: F841
-        occupancy = interpreter.hist_occ.sum(axis=2)
-        return occupancy
+        interpreter.interpret(raw_data, hit_buffer)
+        return interpreter.hist_occ.sum(axis=2)
 
-    def update_hitmap(self, occupancy):
-        self.img.set_data(occupancy)
-        self.img.set_clim(vmin=0, vmax=occupancy.max())
-        fig.canvas.draw_idle()
+    def process_receiver(self, list_index):
+        data_list = self.received_data[list_index]
 
-    def process_latest_packet(self):
-        if len(self.received_data) == 0:
-            return
+        if not data_list:
+            return None
 
-        if self.last_processed == len(self.received_data) - 1:
-            return
+        if self.last_processed[list_index] == len(data_list) - 1:
+            return None
 
-        self.last_processed = len(self.received_data) - 1
-        packet = self.received_data[self.last_processed]
+        self.last_processed[list_index] = len(data_list) - 1
+        packet = data_list[self.last_processed[list_index]]
+
         raw_data = packet["raw"].astype(np.uint32)
+        occ = self.make_hitmap(raw_data, self.rx_ids[list_index])
 
-        occ = self.make_hitmap(raw_data)
+        if self.total_occupancy[list_index] is None:
+            self.total_occupancy[list_index] = np.zeros_like(occ)
 
-        if self.total_occupancy is None:
-            self.total_occupancy = np.zeros_like(occ)
-
-        self.total_occupancy += occ
-
-        self.update_hitmap(self.total_occupancy)
-
-
-monitors = []
-receivers = []
-
-for i, fe in enumerate(frontends):
-    monitor = OnlineMonitor(imgs[i], rx_id=i)
-    # rx_id stuff is a quick fix, needs to be updated and connected to config file
-    monitors.append(monitor)
-
-    tj_receiver = TJReceiver(frontend=fe)
-    tj_receiver.worker.data.connect(monitor.handle_data)
-    tj_receiver.start()
-    receivers.append(tj_receiver)
-
-
-def update_all():
-    for m in monitors:
-        m.process_latest_packet()
-
-
-timer = QtCore.QTimer()
-timer.timeout.connect(update_all)
-timer.start(500)  # run every x ms
-
-app.exec()
+        self.total_occupancy[list_index] += occ
+        return self.total_occupancy[list_index]

@@ -4,7 +4,7 @@
 # buttons to click (start, configure, stop, restart, power cycle) and live plots to admire (hitmap, correlation...)
 # data is should be handled separately to gui in some kind of interpreter
 
-
+import numpy as np
 import sys
 import toml
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
@@ -23,6 +23,9 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 from mantis.tj_interface import TJ_Control
+from mantis.online_monitor import OnlineMonitor
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 
 class StyledButton(QPushButton):
@@ -206,11 +209,55 @@ class ScanControl(QWidget):
 #         self.setLayout(layout)
 
 
-class OnlineMonitor(QWidget):
-    def __init__(self):
+class MonitorView(QWidget):
+    def __init__(self, controller):
         super().__init__()
+        self.TJ = controller
+
         layout = QVBoxLayout()
         self.setLayout(layout)
+
+        # Backend logic
+        self.monitor = OnlineMonitor(self.TJ.user_config_file)
+
+        # Create figure + subplots
+        self.fig, self.axes = plt.subplots(
+            1, self.monitor.num_chips, figsize=(6 * self.monitor.num_chips, 6)
+        )
+
+        if self.monitor.num_chips == 1:
+            self.axes = [self.axes]
+
+        self.imgs = []
+        for ax in self.axes:
+            img = ax.imshow(np.zeros((100, 100)), cmap="hot", interpolation="nearest")
+            self.imgs.append(img)
+            self.fig.colorbar(img, ax=ax)
+            ax.set_title("Hitmap")
+            ax.set_xlabel("Column")
+            ax.set_ylabel("Row")
+
+        # Embed into Qt
+        self.canvas = FigureCanvas(self.fig)
+        layout.addWidget(self.canvas)
+
+        # Timer for live updates
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_all)
+        self.timer.start(200)
+
+    def update_all(self):
+        updated = False
+
+        for list_index in range(self.monitor.num_chips):
+            occ = self.monitor.process_receiver(list_index)
+            if occ is not None:
+                self.imgs[list_index].set_data(occ)
+                self.imgs[list_index].set_clim(vmin=0, vmax=occ.max())
+                updated = True
+
+        if updated:
+            self.canvas.draw_idle()
 
 
 class Configuration(QWidget):
@@ -323,7 +370,7 @@ class MainWindow(QWidget):
             # ("Tuning", Tuning(self.TJ), "Tuning", "green"),
             ("Configuration", Configuration(self.TJ), "Configuration", "green"),
             ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
-            ("OnlineMonitor", OnlineMonitor(), "Online Monitor", "green"),
+            ("MonitorView", MonitorView(self.TJ), "Online Monitor", "green"),
         ]
         #  fmt: on
 

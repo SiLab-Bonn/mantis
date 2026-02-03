@@ -29,9 +29,24 @@ class OnlineMonitor:
         self.total_occupancy = [None] * self.num_chips
         self.last_processed = [-1] * self.num_chips
 
+        # Per-receiver last packet timestamp
+        self.last_packet_timestamp = [None] * self.num_chips
+
         # Receivers
         self.receivers = []
         self.setup_receivers()
+
+        # Correlation histograms
+        self.hit_corr = {}
+        for i in range(self.num_chips):
+            for j in range(i + 1, self.num_chips):
+                self.hit_corr[(i, j)] = {
+                    "col_col": np.zeros((512, 512), dtype=np.uint32),
+                    "row_row": np.zeros((512, 512), dtype=np.uint32),
+                }
+
+        self.last_event = [None] * self.num_chips
+        self.last_hits = [None] * self.num_chips
 
     def load_config(self):
         cfg = toml.load(self.config_file)
@@ -62,11 +77,11 @@ class OnlineMonitor:
         return frontends, rx_ids, self.chip_sn
 
     def setup_receivers(self):
+        from functools import partial
+
         for list_index, fe in enumerate(self.frontends):
             receiver = TJReceiver(frontend=fe)
-            receiver.worker.data.connect(
-                lambda data, idx=list_index: self.handle_data(idx, data)
-            )
+            receiver.worker.data.connect(partial(self.handle_data, list_index))
             receiver.start()
             self.receivers.append(receiver)
 
@@ -77,7 +92,10 @@ class OnlineMonitor:
         interpreter = RawDataInterpreter(rx_id=rx_id)
         hit_buffer = np.zeros(4 * len(raw_data), dtype=hit_dtype)
         interpreter.interpret(raw_data, hit_buffer)
-        return interpreter.hist_occ.sum(axis=2)
+
+        occ = interpreter.hist_occ.sum(axis=2)
+        hits = hit_buffer
+        return occ, hits
 
     def process_receiver(self, list_index):
         data_list = self.received_data[list_index]
@@ -92,15 +110,77 @@ class OnlineMonitor:
         packet = data_list[self.last_processed[list_index]]
 
         raw_data = packet["raw"].astype(np.uint32)
-        occ = self.make_hitmap(raw_data, self.rx_ids[list_index])
+
+        meta = packet.get("meta", {})
+        ts = meta.get("timestamp_start", meta.get("timestamp_stop", None))
+        self.last_packet_timestamp[list_index] = ts
+
+        occ, hits = self.make_hitmap(raw_data, self.rx_ids[list_index])
+
+        self.last_event[list_index] = occ
+        self.last_hits[list_index] = hits
 
         if self.total_occupancy[list_index] is None:
             self.total_occupancy[list_index] = np.zeros_like(occ)
 
         self.total_occupancy[list_index] += occ
+
+        # Correlations
+        for other in range(self.num_chips):
+            if other == list_index:
+                continue
+
+            other_ts = self.last_packet_timestamp[other]
+            other_hits = self.last_hits[other]
+
+            if ts is None or other_ts is None:
+                continue
+            if other_hits is None:
+                continue
+            if abs(ts - other_ts) > 1:
+                continue
+
+            key = (min(list_index, other), max(list_index, other))
+            h = self.hit_corr[key]
+
+            self.correlate_hits(
+                hits["col"],
+                hits["row"],
+                hits["timestamp"],
+                other_hits["col"],
+                other_hits["row"],
+                other_hits["timestamp"],
+                h["col_col"],
+                h["row_row"],
+            )
+
         return self.total_occupancy[list_index]
 
     def reset_occupancy(self):
         self.total_occupancy = [None] * self.num_chips
-        # Also reset last_processed so new packets are processed again
         self.last_processed = [-1] * self.num_chips
+        self.last_packet_timestamp = [None] * self.num_chips
+        for key in self.hit_corr:
+            self.hit_corr[key]["col_col"].fill(0)
+            self.hit_corr[key]["row_row"].fill(0)
+
+    def correlate_hits(
+        self,
+        ref_cols,
+        ref_rows,
+        ref_ts,
+        dut_cols,
+        dut_rows,
+        dut_ts,
+        x_hist,
+        y_hist,
+        dt=50,
+    ):
+        if len(ref_cols) == 0 or len(dut_cols) == 0:
+            return
+
+        time_match = np.abs(ref_ts[:, None] - dut_ts[None, :]) <= dt
+        ref_idx, dut_idx = np.where(time_match)
+
+        np.add.at(x_hist, (ref_cols[ref_idx], dut_cols[dut_idx]), 1)
+        np.add.at(y_hist, (ref_rows[ref_idx], dut_rows[dut_idx]), 1)

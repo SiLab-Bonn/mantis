@@ -5,14 +5,17 @@
 # data is should be handled separately to gui in some kind of interpreter
 
 import numpy as np
+import math
 import sys
 import toml
+import time
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QComboBox,
     QPushButton,
     QPlainTextEdit,
     QLabel,
@@ -88,7 +91,33 @@ class Worker(QObject):
         self.finished.emit()
 
 
-class ScanControl(QWidget):
+class ThreadHelper:
+    def run_in_thread(self, fn, button=None):
+        thread = QThread()
+        worker = Worker(fn)
+
+        if not hasattr(self, "threads"):
+            self.threads = []
+        self.threads.append(thread)
+        self.threads.append(worker)
+
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+
+        if button is not None:
+            worker.error.connect(lambda e: button.set_ready())
+            worker.finished.connect(lambda: button.set_ready())
+
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self.threads.remove(thread))
+
+        thread.start()
+
+
+class ScanControl(QWidget, ThreadHelper):
     def __init__(self, controller):
         super().__init__()
         self.TJ = controller
@@ -144,29 +173,6 @@ class ScanControl(QWidget):
         self.timer.timeout.connect(self.update_gui)
         self.timer.start(200)
 
-    def run_in_thread(self, fn, button):
-        button.set_busy()
-
-        thread = QThread()
-        worker = Worker(fn)
-
-        if not hasattr(self, "threads"):
-            self.threads = []
-        self.threads.append(thread)
-        self.threads.append(worker)
-
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.error.connect(lambda e: self.handle_error(e, button))
-        worker.finished.connect(lambda: button.set_ready())
-        worker.finished.connect(lambda: self.log(button.message))
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self.threads.remove(thread))
-        thread.start()
-
     def update_gui(self):
         if self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
             try:
@@ -209,9 +215,7 @@ class ScanControl(QWidget):
 #         super().__init__()
 #         layout = QVBoxLayout()
 #         self.setLayout(layout)
-
-
-class MonitorView(QWidget):
+class MonitorView(QWidget, ThreadHelper):
     def __init__(self, controller):
         super().__init__()
         self.TJ = controller
@@ -219,116 +223,174 @@ class MonitorView(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
-        # fmt: off
-        # Button specification format:
-        # (
-        #   Internal attribute name:    # how the button is stored on the class (self.btn_start)
-        #   Visible label:              # text shown on the button
-        #   Color name:                 # passed to StyledButton for theming
-        #   Callback Function:          # function executed when the button is clicked, including threading if necessary
-        # )
-        button_specs = [
-            ("btn_reset","Reset","green", lambda: (self.reset())),
-        ]
-        # fmt: on
+        # Reset button
+        btn = StyledButton("Reset", color="green")
+        btn.clicked.connect(self.reset)
+        layout.addWidget(btn)
 
-        self.buttons = {}
+        # Custom viridis with grey zero
+        vir = plt.cm.get_cmap("viridis", 256)
+        vir_colors = vir(np.linspace(0, 1, 256))
+        vir_colors[0] = [0.624, 0.631, 0.643, 1.0]
+        self.viridis_custom = mcolors.ListedColormap(vir_colors)
 
-        for attr_name, label, color, callback in button_specs:
-            btn = StyledButton(label, color=color)
-            self.buttons[attr_name] = btn
-            setattr(self, attr_name, btn)
-            btn.clicked.connect(callback)
-            layout.addWidget(btn)
-
-        # Backend logic
+        # Backend
         self.monitor = OnlineMonitor(self.TJ.user_config_file)
         num = self.monitor.num_chips
         chip_names = self.monitor.chip_sn
 
-        # --- Auto grid layout (near-square) ---
-        import math
+        # Hitmap grid
+        self.fig, self.axes, self.imgs = self.create_grid(
+            nplots=num, title_prefix="Hitmap", chip_names=chip_names, transpose=True
+        )
+        self.canvas = FigureCanvas(self.fig)
+        layout.addWidget(self.canvas)
 
-        ncols = math.ceil(math.sqrt(num))
-        nrows = math.ceil(num / ncols)
+        # Detector selection dropdowns
+        selector_row = QHBoxLayout()
 
-        # Create figure + subplots
-        self.fig, self.axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows))
+        self.detA = QComboBox()
+        self.detB = QComboBox()
 
-        # Add spacing between plots
-        self.fig.subplots_adjust(hspace=0.4, wspace=0.3)
+        for i, name in enumerate(chip_names):
+            self.detA.addItem(f"{i} – {name}", i)
+            self.detB.addItem(f"{i} – {name}", i)
 
-        # Flatten axes for easy iteration
-        self.axes = np.array(self.axes).reshape(-1)
+        self.detA.setCurrentIndex(0)
+        self.detB.setCurrentIndex(1 if num > 1 else 0)
 
-        # No hit white redefinition
-        vir = plt.cm.get_cmap("viridis", 256)
-        vir_colors = vir(np.linspace(0, 1, 256))
-        vir_colors[0] = [1, 1, 1, 1]  # RGBA
-        viridis_white_zero = mcolors.ListedColormap(vir_colors)
+        self.detA.currentIndexChanged.connect(self.update_corr_key)
+        self.detB.currentIndexChanged.connect(self.update_corr_key)
 
-        # Create hitmaps
-        self.imgs = []
-        for i, ax in enumerate(self.axes[:num]):
+        selector_row.addWidget(QLabel("Detector A:"))
+        selector_row.addWidget(self.detA)
+        selector_row.addWidget(QLabel("Detector B:"))
+        selector_row.addWidget(self.detB)
+
+        layout.addLayout(selector_row)
+
+        # Correlation grid
+        self.corr_fig, self.corr_axes, corr_imgs = self.create_grid(
+            nplots=2, title_prefix="Correlation"
+        )
+        self.col_img, self.row_img = corr_imgs
+
+        self.corr_canvas = FigureCanvas(self.corr_fig)
+        layout.addWidget(self.corr_canvas)
+
+        # Initialize correlation key
+        self.current_corr_key = (0, 1) if num > 1 else (0, 0)
+        self.update_corr_key()
+
+        # Start backend thread
+        self.run_in_thread(self.monitor_loop)
+
+        # GUI refresh timer
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_all)
+        self.timer.start(500)
+
+    def update_corr_key(self):
+        a = self.detA.currentData()
+        b = self.detB.currentData()
+
+        if a is None or b is None:
+            return
+        if a == b:
+            return
+
+        self.current_corr_key = (min(a, b), max(a, b))
+
+        k = self.current_corr_key
+        self.corr_axes[0].set_title(f"Col–Col {k[0]} ↔ {k[1]}")
+        self.corr_axes[1].set_title(f"Row–Row {k[0]} ↔ {k[1]}")
+        self.corr_canvas.draw_idle()
+
+    def monitor_loop(self):
+        while True:
+            for i in range(self.monitor.num_chips):
+                self.monitor.process_receiver(i)
+            time.sleep(0.001)
+
+    def update_all(self):
+        # Hitmaps
+        for i in range(self.monitor.num_chips):
+            occ = self.monitor.total_occupancy[i]
+            if occ is not None:
+                self.imgs[i].set_data(occ.T)
+                self.imgs[i].set_clim(0, max(1, occ.max()))
+
+        # Correlations
+        key = self.current_corr_key
+        if key in self.monitor.hit_corr:
+            col_corr = self.monitor.hit_corr[key]["col_col"]
+            row_corr = self.monitor.hit_corr[key]["row_row"]
+
+            self.col_img.set_data(col_corr)
+            self.col_img.set_clim(0, max(1, 20))  # col_corr.max()))
+            # -> quick fix, needs to be worked on
+            self.row_img.set_data(row_corr)
+            self.row_img.set_clim(0, max(1, 20))  # row_corr.max()))
+
+        self.canvas.draw_idle()
+        self.corr_canvas.draw_idle()
+
+    def reset(self):
+        self.monitor.reset_occupancy()
+
+        for img in self.imgs:
+            img.set_data(np.zeros((512, 512)).T)
+            img.set_clim(0, 1)
+
+        self.col_img.set_data(np.zeros((512, 512)))
+        self.col_img.set_clim(0, 1)
+
+        self.row_img.set_data(np.zeros((512, 512)))
+        self.row_img.set_clim(0, 1)
+
+        self.canvas.draw_idle()
+        self.corr_canvas.draw_idle()
+
+    def create_grid(self, nplots, title_prefix, chip_names=None, transpose=False):
+        ncols = math.ceil(math.sqrt(nplots))
+        nrows = math.ceil(nplots / ncols)
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows))
+        axes = np.array(axes).reshape(-1)
+
+        imgs = []
+        for i, ax in enumerate(axes[:nplots]):
+            data = np.zeros((512, 512))
+            if transpose:
+                data = data.T
+
             img = ax.imshow(
-                np.zeros((512, 512)).T,
-                cmap=viridis_white_zero,
-                interpolation="nearest",
+                data,
+                cmap=self.viridis_custom,
                 origin="lower",
+                interpolation="nearest",
                 extent=[1, 512, 1, 512],
                 aspect="equal",
             )
 
-            # --- Create a colorbar axis with matching height ---
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.1)
-            self.fig.colorbar(img, cax=cax)
+            fig.colorbar(img, cax=cax)
 
-            # Ticks
             ax.set_xticks([1, 112, 224, 336, 448, 512])
             ax.set_yticks([1, 112, 224, 336, 448, 512])
 
-            self.imgs.append(img)
-            ax.set_title(f"Hitmap – {chip_names[i]}")
-            ax.set_xlabel("Column")
-            ax.set_ylabel("Row")
+            if chip_names:
+                ax.set_title(f"{title_prefix} – {chip_names[i]}")
+            else:
+                ax.set_title(f"{title_prefix} {i}")
 
-        # Hide unused axes
-        for ax in self.axes[num:]:
+            imgs.append(img)
+
+        for ax in axes[nplots:]:
             ax.set_visible(False)
 
-        # Embed into Qt
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
-
-        # Timer for live updates
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_all)
-        self.timer.start(200)
-
-    def update_all(self):
-        updated = False
-
-        for list_index in range(self.monitor.num_chips):
-            occ = self.monitor.process_receiver(list_index)
-            if occ is not None:
-                self.imgs[list_index].set_data(occ.T)  # swap x/y
-                self.imgs[list_index].set_clim(vmin=0, vmax=occ.max())
-                updated = True
-
-        if updated:
-            self.canvas.draw_idle()
-
-    def reset(self):
-        # Reset backend accumulation
-        self.monitor.reset_occupancy()
-
-        # Reset the displayed hitmaps to zero
-        for img in self.imgs:
-            img.set_data(np.zeros((100, 100)).T)
-            img.set_clim(vmin=0, vmax=1)
-
-        self.canvas.draw_idle()
+        return fig, axes, imgs
 
 
 class Configuration(QWidget):

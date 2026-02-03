@@ -21,9 +21,9 @@ chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or
 send_data = "tcp://127.0.0.1:5500"
 
 # Example for adding more chips:
-# [modules.module_0.chip_1]
-# chip_sn = "W14R13"
-# chip_id = 1
-# receiver = "rx1"
-# chip_config_file = ""
-# send_data = "tcp://127.0.0.1:6500"
+[modules.module_0.chip_1]
+chip_sn = "W14R13"
+chip_id = 1
+receiver = "rx1"
+chip_config_file = ""
+send_data = "tcp://127.0.0.1:6500"

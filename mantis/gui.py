@@ -13,9 +13,11 @@ from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
+    QCheckBox,
     QVBoxLayout,
     QHBoxLayout,
     QComboBox,
+    QGridLayout,
     QPushButton,
     QPlainTextEdit,
     QLabel,
@@ -27,10 +29,7 @@ from PyQt6.QtWidgets import (
 )
 from mantis.tj_interface import TJ_Control
 from mantis.online_monitor import OnlineMonitor
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+import pyqtgraph as pg
 
 
 class StyledButton(QPushButton):
@@ -224,31 +223,35 @@ class MonitorView(QWidget, ThreadHelper):
         self.setLayout(layout)
 
         # Reset button
-        btn = StyledButton("Reset", color="green")
-        btn.clicked.connect(self.reset)
-        layout.addWidget(btn)
+        btn_reset = StyledButton("Reset", color="green")
+        btn_reset.clicked.connect(self.reset)
+        layout.addWidget(btn_reset)
 
-        # Custom viridis with grey zero
-        vir = plt.cm.get_cmap("viridis", 256)
-        vir_colors = vir(np.linspace(0, 1, 256))
-        vir_colors[0] = [0.624, 0.631, 0.643, 1.0]
-        self.viridis_custom = mcolors.ListedColormap(vir_colors)
+        # # Masking button
+        self.cb_mask = QCheckBox("Mask noisy pixels")
+        self.cb_mask.stateChanged.connect(self.masking)
+        layout.addWidget(self.cb_mask)
 
         # Backend
         self.monitor = OnlineMonitor(self.TJ.user_config_file)
         num = self.monitor.num_chips
         chip_names = self.monitor.chip_sn
 
-        # Hitmap grid
-        self.fig, self.axes, self.imgs = self.create_grid(
-            nplots=num, title_prefix="Hitmap", chip_names=chip_names, transpose=True
-        )
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        # Hitmap
+        grid_layout, self.imgs = self.create_pg_grid(num, chip_names)
+        layout.addLayout(grid_layout)
 
-        # Detector selection dropdowns
+        # Counter
+        self.hit_labels = []
+        counter_row = QHBoxLayout()
+        for name in chip_names:
+            lbl = QLabel(f"{name}: 0 hits")
+            lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+            self.hit_labels.append(lbl)
+            counter_row.addWidget(lbl)
+        layout.addLayout(counter_row)
+
         selector_row = QHBoxLayout()
-
         self.detA = QComboBox()
         self.detB = QComboBox()
 
@@ -266,59 +269,91 @@ class MonitorView(QWidget, ThreadHelper):
         selector_row.addWidget(self.detA)
         selector_row.addWidget(QLabel("Detector B:"))
         selector_row.addWidget(self.detB)
-
         layout.addLayout(selector_row)
 
-        # Correlation grid
-        self.corr_fig, self.corr_axes, corr_imgs = self.create_grid(
-            nplots=2, title_prefix="Correlation"
-        )
+        # Correlation
+        corr_layout, corr_imgs = self.create_pg_grid(2, ["Col–Col", "Row–Row"])
         self.col_img, self.row_img = corr_imgs
+        layout.addLayout(corr_layout)
 
-        self.corr_canvas = FigureCanvas(self.corr_fig)
-        layout.addWidget(self.corr_canvas)
-
-        # Initialize correlation key
         self.current_corr_key = (0, 1) if num > 1 else (0, 0)
         self.update_corr_key()
 
-        # Start backend thread
+        # Backend thread
         self.run_in_thread(self.monitor_loop)
 
         # GUI refresh timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_all)
-        self.timer.start(500)
+        self.timer.start(200)
+
+    def create_pg_grid(self, nplots, titles):
+        pg.setConfigOption("background", "w")  # white background
+        pg.setConfigOption("foreground", "k")  # black axes, ticks, labels
+
+        ncols = math.ceil(math.sqrt(nplots))
+        # nrows = math.ceil(nplots / ncols)
+
+        layout = QGridLayout()
+        images = []
+
+        ticks = [0, 112, 224, 336, 448, 512]
+
+        for i in range(nplots):
+            view = pg.GraphicsLayoutWidget()
+            plot = view.addPlot()
+
+            plot.getAxis("bottom").setTicks([[(t, str(t)) for t in ticks]])
+            plot.getAxis("left").setTicks([[(t, str(t)) for t in ticks]])
+
+            plot.setXRange(0, 512)
+            plot.setYRange(0, 512)
+
+            img = pg.ImageItem()
+            plot.addItem(img)
+
+            cmap = pg.colormap.get("viridis")
+            img.setLookupTable(cmap.getLookupTable())
+
+            plot.setTitle(titles[i])
+
+            layout.addWidget(view, i // ncols, i % ncols)
+            images.append(img)
+
+        return layout, images
 
     def update_corr_key(self):
         a = self.detA.currentData()
         b = self.detB.currentData()
-
-        if a is None or b is None:
-            return
-        if a == b:
+        if a is None or b is None or a == b:
             return
 
         self.current_corr_key = (min(a, b), max(a, b))
-
-        k = self.current_corr_key
-        self.corr_axes[0].set_title(f"Col–Col {k[0]} ↔ {k[1]}")
-        self.corr_axes[1].set_title(f"Row–Row {k[0]} ↔ {k[1]}")
-        self.corr_canvas.draw_idle()
 
     def monitor_loop(self):
         while True:
             for i in range(self.monitor.num_chips):
                 self.monitor.process_receiver(i)
-            time.sleep(0.001)
+            time.sleep(0.01)
 
     def update_all(self):
-        # Hitmaps
-        for i in range(self.monitor.num_chips):
-            occ = self.monitor.total_occupancy[i]
+        # Hitmaps + counters
+        for i, (img, occ, lbl, name) in enumerate(
+            zip(
+                self.imgs,
+                self.monitor.total_occupancy,
+                self.hit_labels,
+                self.monitor.chip_sn,
+            )
+        ):
             if occ is not None:
-                self.imgs[i].set_data(occ.T)
-                self.imgs[i].set_clim(0, max(1, occ.max()))
+                occ_rot = np.rot90(occ, k=1).T
+                img.setImage(occ_rot, autoLevels=False)
+                img.setLevels([0, max(1, occ.max())])
+
+                hits = self.monitor.total_hits[i]  # int(occ.sum())
+
+                lbl.setText(f"{name}: {hits} hits")
 
         # Correlations
         key = self.current_corr_key
@@ -326,71 +361,33 @@ class MonitorView(QWidget, ThreadHelper):
             col_corr = self.monitor.hit_corr[key]["col_col"]
             row_corr = self.monitor.hit_corr[key]["row_row"]
 
-            self.col_img.set_data(col_corr)
-            self.col_img.set_clim(0, max(1, 20))  # col_corr.max()))
-            # -> quick fix, needs to be worked on
-            self.row_img.set_data(row_corr)
-            self.row_img.set_clim(0, max(1, 20))  # row_corr.max()))
+            self.col_img.setImage(col_corr, autoLevels=False)
+            self.col_img.setLevels([0, 20])
 
-        self.canvas.draw_idle()
-        self.corr_canvas.draw_idle()
+            self.row_img.setImage(row_corr, autoLevels=False)
+            self.row_img.setLevels([0, 20])
 
     def reset(self):
         self.monitor.reset_occupancy()
 
+        zero = np.zeros((512, 512))
         for img in self.imgs:
-            img.set_data(np.zeros((512, 512)).T)
-            img.set_clim(0, 1)
+            img.setImage(zero)
 
-        self.col_img.set_data(np.zeros((512, 512)))
-        self.col_img.set_clim(0, 1)
+        self.col_img.setImage(zero)
+        self.row_img.setImage(zero)
 
-        self.row_img.set_data(np.zeros((512, 512)))
-        self.row_img.set_clim(0, 1)
+        for lbl, name in zip(self.hit_labels, self.monitor.chip_sn):
+            lbl.setText(f"{name}: 0 hits")
 
-        self.canvas.draw_idle()
-        self.corr_canvas.draw_idle()
-
-    def create_grid(self, nplots, title_prefix, chip_names=None, transpose=False):
-        ncols = math.ceil(math.sqrt(nplots))
-        nrows = math.ceil(nplots / ncols)
-
-        fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows))
-        axes = np.array(axes).reshape(-1)
-
-        imgs = []
-        for i, ax in enumerate(axes[:nplots]):
-            data = np.zeros((512, 512))
-            if transpose:
-                data = data.T
-
-            img = ax.imshow(
-                data,
-                cmap=self.viridis_custom,
-                origin="lower",
-                interpolation="nearest",
-                extent=[1, 512, 1, 512],
-                aspect="equal",
-            )
-
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.1)
-            fig.colorbar(img, cax=cax)
-
-            ax.set_xticks([1, 112, 224, 336, 448, 512])
-            ax.set_yticks([1, 112, 224, 336, 448, 512])
-
-            if chip_names:
-                ax.set_title(f"{title_prefix} – {chip_names[i]}")
-            else:
-                ax.set_title(f"{title_prefix} {i}")
-
-            imgs.append(img)
-
-        for ax in axes[nplots:]:
-            ax.set_visible(False)
-
-        return fig, axes, imgs
+    def masking(self):
+        if self.cb_mask.isChecked():
+            # Recompute mask for all chips
+            for i in range(self.monitor.num_chips):
+                self.monitor.mask[i] = self.monitor.masking(i)
+        else:
+            # Disable masking
+            self.monitor.mask = [None] * self.monitor.num_chips
 
 
 class Configuration(QWidget):
@@ -500,7 +497,6 @@ class MainWindow(QWidget):
         # )
         pages = [
             # ("Powering", Powering(), "Powering", "green"),
-            # ("Tuning", Tuning(self.TJ), "Tuning", "green"),
             ("Configuration", Configuration(self.TJ), "Configuration", "green"),
             ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
             ("MonitorView", MonitorView(self.TJ), "Online Monitor", "green"),

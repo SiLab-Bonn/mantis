@@ -17,7 +17,7 @@ class_spec = [
     ("n_scan_params", numba.int32),
     ("trigger_data_format", numba.uint8),
     ("rx_id", numba.uint8),
-    ("hist_occ", numba.uint32[:, :, :]),
+    ("hist_occ", numba.uint32[:, :]),
     ("hist_tot", numba.uint16[:, :, :, :]),
     ("hist_tdc", numba.uint32[:]),
     ("n_triggers", numba.int64),
@@ -62,7 +62,7 @@ class RawDataInterpreter(object):
         self.n_triggers = 0
         self.n_tdc = 0
 
-        self.hist_occ = np.zeros((512, 512, self.n_scan_params), dtype=np.uint32)
+        self.hist_occ = np.zeros((512, 512), dtype=np.uint32)
         self.hist_tot = np.zeros((512, 512, self.n_scan_params, 128), dtype=np.uint16)
         self.hist_tdc = np.zeros(4096, dtype=np.uint32)
 
@@ -71,7 +71,7 @@ class RawDataInterpreter(object):
 
         self.reset()
 
-    def interpret(self, raw_data, hit_data, scan_param_id=0):
+    def interpret(self, raw_data, hit_data):
         hit_index = 0
 
         for raw_data_word in raw_data:
@@ -100,22 +100,19 @@ class RawDataInterpreter(object):
                             self.error_cnt += 1  # EOF before SOF
                         self.sof = False
                         self.token_id += 1
-                    elif d == 0x13C:  # IDLE
-                        pass
-                    else:
+                    elif d != 0x13C:  # not IDLE, but data
                         if not self.sof:
                             self.error_cnt += 1
-
                         if not self.tj_data_flag:  # Start block of hit words
                             self.tj_data_flag = 1  # Starting with column data
                             self.col = (d & 0xFF) << 1
                         elif self.tj_data_flag == 1:
                             self.tj_data_flag = 2
-                            self.le = self._gray2bin((d & 0xFE) >> 1)
-                            self.te = (d & 0x01) << 6
+                            # self.le = self._gray2bin((d & 0xFE) >> 1)
+                            # self.te = (d & 0x01) << 6
                         elif self.tj_data_flag == 2:
                             self.tj_data_flag = 3
-                            self.te = self._gray2bin(self.te | ((d & 0xFC) >> 2))
+                            # self.te = self._gray2bin(self.te | ((d & 0xFC) >> 2))
                             self.row = (d & 0x01) << 8
                             self.col = self.col + ((d & 0x02) >> 1)
                         elif self.tj_data_flag == 3:
@@ -124,20 +121,18 @@ class RawDataInterpreter(object):
                             )
                             self.row = self.row | (d & 0xFF)
 
-                            # Prepare for next data block. Increase hit index
-                            hit_index += 1
-
                             hit_data[hit_index]["col"] = self.col
                             hit_data[hit_index]["row"] = self.row
                             hit_data[hit_index]["timestamp"] = self.tj_timestamp
-                            hit_data[hit_index]["rx_id"] = self.rx_id
                             # hit_data[hit_index]["event_number"] = self.event_number
+
+                            # Prepare for next data block. Increase hit index
+                            hit_index += 1
 
                             self._fill_hist(
                                 self.col,
                                 self.row,
                                 (self.te - self.le) & 0x7F,
-                                scan_param_id,
                             )
 
                         else:
@@ -164,6 +159,9 @@ class RawDataInterpreter(object):
         b0 = (gray & 0x01) ^ (b1 >> 1)
         return b6 + b5 + b4 + b3 + b2 + b1 + b0
 
-    def _fill_hist(self, col, row, tot, scan_param_id):
-        self.hist_occ[col, row, scan_param_id] += 1
+    def _fill_hist(self, col, row, tot):
+        self.hist_occ[col, row] += 1
         # self.hist_tot[col, row, scan_param_id, tot] += 1
+
+    def get_occ(self):
+        return self.hist_occ

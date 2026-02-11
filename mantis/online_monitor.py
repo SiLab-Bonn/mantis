@@ -1,42 +1,67 @@
 # %gui qt
+import toml
+import numpy as np
+from numba import njit
+
 from mantis.receiver import TJReceiver
 from mantis.mini_interpreter import RawDataInterpreter
-import numpy as np
-import toml
 
 hit_dtype = np.dtype(
     [
         ("col", "<i2"),
         ("row", "<i2"),
         ("timestamp", "<i8"),
-        ("rx_id", "<i2"),
     ]
 )
 
-USER_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/user_configuration.toml"
+
+@njit(cache=True)
+def correlate_hits_numba(
+    ref_cols, ref_rows, ref_ts, dut_cols, dut_rows, dut_ts, x_hist, y_hist, dt
+):
+    # n_ref = ref_cols.shape[0]
+    n_dut = dut_cols.shape[0]
+
+    j_start = 0
+    i = 0
+    # for i in range(n_ref):
+    for ts_ref in ref_ts:
+        # ts_ref = ref_ts[i]
+
+        # Move j_start forward until DUT timestamps are within [ts_ref - dt, ...]
+        while j_start < n_dut and dut_ts[j_start] < ts_ref - dt:
+            j_start += 1
+
+        # From j_start, walk forward while within [ts_ref - dt, ts_ref + dt]
+        j = j_start
+        while j < n_dut and dut_ts[j] <= ts_ref + dt:
+            x_hist[ref_cols[i], dut_cols[j]] += 1
+            y_hist[ref_rows[i], dut_rows[j]] += 1
+            j += 1
+        i += 1
 
 
 class OnlineMonitor:
     def __init__(self, config_file):
         self.config_file = config_file
 
-        # Load frontends + rx_ids
         self.frontends, self.rx_ids, self.chip_sn = self.load_config()
         self.num_chips = len(self.frontends)
 
-        # Per-receiver buffers
-        self.received_data = [[] for _ in range(self.num_chips)]
+        self.received_data = [None] * self.num_chips
+
         self.total_occupancy = [None] * self.num_chips
-        self.last_processed = [-1] * self.num_chips
-
-        # Per-receiver last packet timestamp
         self.last_packet_timestamp = [None] * self.num_chips
+        self.last_hits = [None] * self.num_chips
+        self.total_hits = [0] * self.num_chips
+        self.mask = [None] * self.num_chips
 
-        # Receivers
-        self.receivers = []
-        self.setup_receivers()
+        # Merkt sich, welche Paketpaare bereits korreliert wurden
+        self.last_correlated_pairs = set()
 
-        # Correlation histograms
+        self.interpreters = [RawDataInterpreter(rx_id=rx_id) for rx_id in self.rx_ids]
+        [interpreter.reset() for interpreter in self.interpreters]
+        # Correlation histograms: one pair per chip combination (i < j)
         self.hit_corr = {}
         for i in range(self.num_chips):
             for j in range(i + 1, self.num_chips):
@@ -45,40 +70,41 @@ class OnlineMonitor:
                     "row_row": np.zeros((512, 512), dtype=np.uint32),
                 }
 
-        self.last_event = [None] * self.num_chips
-        self.last_hits = [None] * self.num_chips
+        self.setup_receivers()
 
     def load_config(self):
         cfg = toml.load(self.config_file)
 
         frontends = []
         rx_ids = []
-        self.chip_sn = []
+        chip_sn = []
 
         modules = cfg.get("modules", {})
-
-        for module_name, module_data in modules.items():
+        for _, module_data in modules.items():
             for key, entry in module_data.items():
-                if key.startswith("chip_"):
-                    fe = entry.get("send_data")
-                    rx_str = entry.get("receiver")
-                    csn = entry.get("chip_sn")
+                if not key.startswith("chip_"):
+                    continue
 
-                    if isinstance(rx_str, str) and rx_str.startswith("rx"):
-                        rx_id = int(rx_str[2:])
-                    else:
-                        rx_id = None
+                fe = entry.get("send_data")
+                rx_str = entry.get("receiver")
+                csn = entry.get("chip_sn")
 
-                    if fe is not None:
-                        frontends.append(fe)
-                        rx_ids.append(rx_id)
-                        self.chip_sn.append(csn)
+                if isinstance(rx_str, str) and rx_str.startswith("rx"):
+                    rx_id = int(rx_str[2:])
+                else:
+                    rx_id = None
 
-        return frontends, rx_ids, self.chip_sn
+                if fe is not None:
+                    frontends.append(fe)
+                    rx_ids.append(rx_id)
+                    chip_sn.append(csn)
+
+        return frontends, rx_ids, chip_sn
 
     def setup_receivers(self):
         from functools import partial
 
+        self.receivers = []
         for list_index, fe in enumerate(self.frontends):
             receiver = TJReceiver(frontend=fe)
             receiver.worker.data.connect(partial(self.handle_data, list_index))
@@ -86,83 +112,85 @@ class OnlineMonitor:
             self.receivers.append(receiver)
 
     def handle_data(self, list_index, data):
-        self.received_data[list_index].append(data)
+        self.received_data[list_index] = data
 
-    def make_hitmap(self, raw_data, rx_id):
-        interpreter = RawDataInterpreter(rx_id=rx_id)
+    def make_hitmap(self, raw_data, rx_id, interpreter):
+        raw_data = raw_data.astype(np.uint32, copy=False)
+
+        # interpreter.reset()
         hit_buffer = np.zeros(4 * len(raw_data), dtype=hit_dtype)
-        interpreter.interpret(raw_data, hit_buffer)
 
-        occ = interpreter.hist_occ.sum(axis=2)
-        hits = hit_buffer
+        hits = interpreter.interpret(raw_data, hit_buffer)
+        occ = interpreter.get_occ()
+
+        # hits = hit_buffer
         return occ, hits
 
     def process_receiver(self, list_index):
-        data_list = self.received_data[list_index]
-
-        if not data_list:
+        packet = self.received_data[list_index]
+        if packet is None:
             return None
 
-        if self.last_processed[list_index] == len(data_list) - 1:
-            return None
+        self.received_data[list_index] = None
 
-        self.last_processed[list_index] = len(data_list) - 1
-        packet = data_list[self.last_processed[list_index]]
-
-        raw_data = packet["raw"].astype(np.uint32)
-
+        raw_data = packet["raw"]
         meta = packet.get("meta", {})
+
         ts = meta.get("timestamp_start", meta.get("timestamp_stop", None))
         self.last_packet_timestamp[list_index] = ts
 
-        occ, hits = self.make_hitmap(raw_data, self.rx_ids[list_index])
-
-        self.last_event[list_index] = occ
-        self.last_hits[list_index] = hits
+        interpreter = self.interpreters[list_index]
+        occ, hits = self.make_hitmap(raw_data, self.rx_ids[list_index], interpreter)
 
         if self.total_occupancy[list_index] is None:
-            self.total_occupancy[list_index] = np.zeros_like(occ)
+            self.total_occupancy[list_index] = np.zeros_like(occ, dtype=np.uint32)
 
-        self.total_occupancy[list_index] += occ
+        # if self.mask is not None:
 
-        # Correlations
-        for other in range(self.num_chips):
-            if other == list_index:
-                continue
+        self.total_occupancy[list_index] = occ
+        # Apply mask only if mask exists and checkbox is active
+        if self.mask[list_index] is not None:
+            occ[self.mask[list_index]] = 0
+            # occ[not masked array]
+        self.last_hits[list_index] = hits
+        self.total_hits[list_index] += hits.shape[0]
 
-            other_ts = self.last_packet_timestamp[other]
-            other_hits = self.last_hits[other]
+        if ts is not None:
+            for other in range(self.num_chips):
+                if other == list_index:
+                    continue
 
-            if ts is None or other_ts is None:
-                continue
-            if other_hits is None:
-                continue
-            if abs(ts - other_ts) > 1:
-                continue
+                other_ts = self.last_packet_timestamp[other]
+                other_hits = self.last_hits[other]
 
-            key = (min(list_index, other), max(list_index, other))
-            h = self.hit_corr[key]
+                if other_ts is None or other_hits is None:
+                    continue
+                if abs(ts - other_ts) > 1:
+                    continue
 
-            self.correlate_hits(
-                hits["col"],
-                hits["row"],
-                hits["timestamp"],
-                other_hits["col"],
-                other_hits["row"],
-                other_hits["timestamp"],
-                h["col_col"],
-                h["row_row"],
-            )
+                # Eindeutige Paar-ID für dieses Paketpaar
+                pair_id = (min(list_index, other), max(list_index, other), ts, other_ts)
+                # Schon korreliert? Dann überspringen
+                if pair_id in self.last_correlated_pairs:
+                    continue
+
+                key = (min(list_index, other), max(list_index, other))
+                h = self.hit_corr[key]
+
+                self.correlate_hits(
+                    hits["col"],
+                    hits["row"],
+                    hits["timestamp"],
+                    other_hits["col"],
+                    other_hits["row"],
+                    other_hits["timestamp"],
+                    h["col_col"],
+                    h["row_row"],
+                )
+
+                self.last_correlated_pairs.add(pair_id)
 
         return self.total_occupancy[list_index]
-
-    def reset_occupancy(self):
-        self.total_occupancy = [None] * self.num_chips
-        self.last_processed = [-1] * self.num_chips
-        self.last_packet_timestamp = [None] * self.num_chips
-        for key in self.hit_corr:
-            self.hit_corr[key]["col_col"].fill(0)
-            self.hit_corr[key]["row_row"].fill(0)
 
     def correlate_hits(
         self,
@@ -176,11 +204,33 @@ class OnlineMonitor:
         y_hist,
         dt=50,
     ):
-        if len(ref_cols) == 0 or len(dut_cols) == 0:
+        if ref_cols.size == 0 or dut_cols.size == 0:
             return
 
-        time_match = np.abs(ref_ts[:, None] - dut_ts[None, :]) <= dt
-        ref_idx, dut_idx = np.where(time_match)
+        correlate_hits_numba(
+            ref_cols, ref_rows, ref_ts, dut_cols, dut_rows, dut_ts, x_hist, y_hist, dt
+        )
 
-        np.add.at(x_hist, (ref_cols[ref_idx], dut_cols[dut_idx]), 1)
-        np.add.at(y_hist, (ref_rows[ref_idx], dut_rows[dut_idx]), 1)
+    def masking(self, chip_index):
+        occ = self.total_occupancy[chip_index]
+        if occ is None:
+            return None
+
+        mu = occ.mean()
+        sigma = occ.std()
+        threshold = mu + 3 * sigma
+
+        # True = masked pixel
+        mask = occ > threshold
+        return mask
+
+    def reset_occupancy(self):
+        [interpreter.reset() for interpreter in self.interpreters]
+        self.total_occupancy = [None] * self.num_chips
+        self.last_packet_timestamp = [None] * self.num_chips
+        self.last_hits = [None] * self.num_chips
+        self.total_hits = [0] * self.num_chips
+        self.last_correlated_pairs.clear()
+        for key in self.hit_corr:
+            self.hit_corr[key]["col_col"].fill(0)
+            self.hit_corr[key]["row_row"].fill(0)

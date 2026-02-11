@@ -27,3 +27,18 @@ chip_id = 1
 receiver = "rx1"
 chip_config_file = ""
 send_data = "tcp://127.0.0.1:6500"
+
+# [modules.module_0.chip_2]
+# chip_sn = "W18R05"
+# chip_id = 0
+# receiver = "rx3"
+# chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists
+# send_data = "tcp://127.0.0.1:5500"
+
+# # Example for adding more chips:
+# [modules.module_0.chip_3]
+# chip_sn = "W14R13"
+# chip_id = 1
+# receiver = "rx3"
+# chip_config_file = ""
+# send_data = "tcp://127.0.0.1:6500"

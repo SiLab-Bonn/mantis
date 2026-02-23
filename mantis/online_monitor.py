@@ -56,7 +56,6 @@ class OnlineMonitor:
         self.total_hits = [0] * self.num_chips
         self.mask = [None] * self.num_chips
 
-        # Merkt sich, welche Paketpaare bereits korreliert wurden
         self.last_correlated_pairs = set()
 
         self.interpreters = [RawDataInterpreter(rx_id=rx_id) for rx_id in self.rx_ids]
@@ -145,15 +144,18 @@ class OnlineMonitor:
         if self.total_occupancy[list_index] is None:
             self.total_occupancy[list_index] = np.zeros_like(occ, dtype=np.uint32)
 
-        # if self.mask is not None:
-
         self.total_occupancy[list_index] = occ
-        # Apply mask only if mask exists and checkbox is active
-        if self.mask[list_index] is not None:
-            occ[self.mask[list_index]] = 0
-            # occ[not masked array]
         self.last_hits[list_index] = hits
         self.total_hits[list_index] += hits.shape[0]
+
+        # # Apply mask only if mask exists and checkbox is active
+        # if self.mask[list_index] is not None:
+        #     mask = self.mask[list_index]
+        #     display_occ = occ.copy()
+        #     display_occ[mask] = 0
+        #     valid = ~mask[hits["col"], hits["row"]]
+        #     hits = hits[valid]
+        #     self.last_hits[list_index] = hits
 
         if ts is not None:
             for other in range(self.num_chips):
@@ -165,12 +167,10 @@ class OnlineMonitor:
 
                 if other_ts is None or other_hits is None:
                     continue
-                if abs(ts - other_ts) > 1:
-                    continue
 
-                # Eindeutige Paar-ID für dieses Paketpaar
                 pair_id = (min(list_index, other), max(list_index, other), ts, other_ts)
-                # Schon korreliert? Dann überspringen
+
+                # skip already correlated pairs
                 if pair_id in self.last_correlated_pairs:
                     continue
 

@@ -9,7 +9,7 @@ import math
 import sys
 import toml
 import time
-from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject
+from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject, Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -25,11 +25,16 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QStackedWidget,
+    QTabWidget,
     QFrame,
 )
 from mantis.tj_interface import TJ_Control
 from mantis.online_monitor import OnlineMonitor
 import pyqtgraph as pg
+
+from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
+from tjmonopix2.scans.scan_analog import AnalogScan
+from tjmonopix2.scans.scan_source import SourceScan
 
 
 class StyledButton(QPushButton):
@@ -92,6 +97,7 @@ class Worker(QObject):
 
 class ThreadHelper:
     def run_in_thread(self, fn, button=None):
+        # Create thread + worker
         thread = QThread()
         worker = Worker(fn)
 
@@ -102,26 +108,50 @@ class ThreadHelper:
 
         worker.moveToThread(thread)
 
+        # Start worker when thread starts
         thread.started.connect(worker.run)
 
         if button is not None:
-            worker.error.connect(lambda e: button.set_ready())
-            worker.finished.connect(lambda: button.set_ready())
+            worker.error.connect(lambda e: self.handle_error(e, button))
 
+        # Button ready + message printing
+        if button is not None:
+            worker.finished.connect(lambda: button.set_ready())
+            worker.finished.connect(lambda: self.log(button.message))
+
+        # Cleanup
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self.threads.remove(thread))
 
+        # Start thread
+        if button is not None:
+            button.set_busy()
         thread.start()
 
 
 class ScanControl(QWidget, ThreadHelper):
+    append_text = pyqtSignal(str)
+
     def __init__(self, controller):
         super().__init__()
         self.TJ = controller
 
         layout = QVBoxLayout()
+
+        self.SCAN_TYPES = {
+            "Analog Scan": AnalogScan,
+            "Source Scan": SourceScan,
+            "External Trigger Scan": ExtTriggerScan,
+        }
+
+        # Scan type selector
+        self.scan_selector = QComboBox()
+        self.scan_selector.addItems(
+            ["External Trigger Scan", "Analog Scan", "Source Scan"]
+        )
+        layout.addWidget(self.scan_selector)
 
         # fmt: off
         # Button specification format:
@@ -133,10 +163,10 @@ class ScanControl(QWidget, ThreadHelper):
         #   Message:                    # Message to be shown after operation is completed
         # )
         button_specs = [
-            ("btn_initialize","Initialize","green",lambda: self.run_in_thread(self.TJ.initialize, self.btn_initialize), "Initialization complete"),
-            ("btn_conf","Configure","green",lambda: self.configure_clicked(), "Configuration complete"), # threading separately, because config loading, which cannot be threaded
-            ("btn_start","Start Scan","green",lambda: self.run_in_thread(self.TJ.start_scan, self.btn_start), "Scan complete"),
-            ("btn_stop", "Stop Scan", "green", lambda: (self.TJ.stop_scan(), self.log("Scan stopped")), ""), # message printed separately, because no threading
+            ("btn_initialize","Initialize","green", lambda: self.initialize_clicked(), "Initialization complete"),
+            ("btn_conf","Configure","green",lambda: self.configure_clicked(), "Configuration complete"),
+            ("btn_start","Start Scan","green",lambda: self.start_scan_clicked(), "Scan complete"),
+            ("btn_stop", "Stop Scan", "green", lambda: self.stop_scan_clicked(), ""), # message printed separately, because no threading
         ]
         # fmt: on
 
@@ -161,11 +191,18 @@ class ScanControl(QWidget, ThreadHelper):
 
         self.progress = QProgressBar()
         self.progress.setMinimum(0)
+        self.progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress.setStyleSheet("""
+            QProgressBar::chunk {
+                background-color: rgba(42, 120, 142, 0.5);
+            }
+        """)
         layout.addWidget(self.progress)
 
         self.setLayout(layout)
 
         self._stdout = sys.stdout
+        self.append_text.connect(self.log)
         sys.stdout = self
 
         self.timer = QTimer()
@@ -173,26 +210,45 @@ class ScanControl(QWidget, ThreadHelper):
         self.timer.start(200)
 
     def update_gui(self):
-        if self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
+        scan = self.TJ.scan_ext
+
+        if scan and hasattr(scan, "pbar"):
             try:
-                total = self.TJ.scan_ext.pbar.total
-                current = self.TJ.scan_ext.pbar.n
+                total = scan.pbar.total
+                current = scan.pbar.n
                 self.progress.setMaximum(total)
                 self.progress.setValue(current)
             except Exception:
                 pass
 
-        if self.TJ.scan_ext and self.TJ.scan_ext.stop_scan.is_set():
+        if scan and hasattr(scan, "stop_scan") and scan.stop_scan.is_set():
             self.status_label.setText("")
-        elif self.TJ.scan_ext and hasattr(self.TJ.scan_ext, "pbar"):
+        elif scan and hasattr(scan, "pbar"):
             self.status_label.setText("Scan running")
         else:
             self.status_label.setText("")
+
+    def initialize_clicked(self):
+        selected = self.scan_selector.currentText()
+        self.TJ.scan_type = self.SCAN_TYPES[selected]
+
+        self.run_in_thread(self.TJ.initialize, self.btn_initialize)
 
     def configure_clicked(self):
         self.TJ.load_config()
 
         self.run_in_thread(self.TJ.configure, self.btn_conf)
+
+    def start_scan_clicked(self):
+        self.run_in_thread(self.TJ.start_scan, self.btn_start)
+
+    def stop_scan_clicked(self):
+        if hasattr(self.TJ.scan_ext, "stop_scan"):
+            self.TJ.stop_scan()
+            self.log("Scan stopped, wait until Scan complete before starting next scan")
+            self.btn_start.set_ready()
+        else:
+            self.log("Stop Scan not available for this scan type")
 
     def handle_error(self, e, button):
         self.log(f"ERROR: {e}")
@@ -203,7 +259,7 @@ class ScanControl(QWidget, ThreadHelper):
 
     def write(self, text):
         if text.strip():
-            self.log(text)
+            self.append_text.emit(text)
 
     def flush(self):
         pass
@@ -227,7 +283,7 @@ class MonitorView(QWidget, ThreadHelper):
         btn_reset.clicked.connect(self.reset)
         layout.addWidget(btn_reset)
 
-        # # Masking button
+        # Masking button
         self.cb_mask = QCheckBox("Mask noisy pixels")
         self.cb_mask.stateChanged.connect(self.masking)
         layout.addWidget(self.cb_mask)
@@ -237,11 +293,21 @@ class MonitorView(QWidget, ThreadHelper):
         num = self.monitor.num_chips
         chip_names = self.monitor.chip_sn
 
-        # Hitmap
-        grid_layout, self.imgs = self.create_pg_grid(num, chip_names)
-        layout.addLayout(grid_layout)
+        # --- Tabs ---
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
 
-        # Counter
+        # -------------------------
+        # PAGE 1: Hitmaps
+        # -------------------------
+        page_hits = QWidget()
+        page_hits_layout = QVBoxLayout(page_hits)
+
+        # Hitmap grid
+        grid_layout, self.imgs = self.create_pg_grid(num, chip_names)
+        page_hits_layout.addLayout(grid_layout)
+
+        # Counters
         self.hit_labels = []
         counter_row = QHBoxLayout()
         for name in chip_names:
@@ -249,8 +315,17 @@ class MonitorView(QWidget, ThreadHelper):
             lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
             self.hit_labels.append(lbl)
             counter_row.addWidget(lbl)
-        layout.addLayout(counter_row)
+        page_hits_layout.addLayout(counter_row)
 
+        tabs.addTab(page_hits, "Hitmaps")
+
+        # -------------------------
+        # PAGE 2: Correlations
+        # -------------------------
+        page_corr = QWidget()
+        page_corr_layout = QVBoxLayout(page_corr)
+
+        # Detector selector
         selector_row = QHBoxLayout()
         self.detA = QComboBox()
         self.detB = QComboBox()
@@ -269,13 +344,16 @@ class MonitorView(QWidget, ThreadHelper):
         selector_row.addWidget(self.detA)
         selector_row.addWidget(QLabel("Detector B:"))
         selector_row.addWidget(self.detB)
-        layout.addLayout(selector_row)
+        page_corr_layout.addLayout(selector_row)
 
-        # Correlation
+        # Correlation plots
         corr_layout, corr_imgs = self.create_pg_grid(2, ["Col–Col", "Row–Row"])
         self.col_img, self.row_img = corr_imgs
-        layout.addLayout(corr_layout)
+        page_corr_layout.addLayout(corr_layout)
 
+        tabs.addTab(page_corr, "Correlations")
+
+        # Initialize correlation key
         self.current_corr_key = (0, 1) if num > 1 else (0, 0)
         self.update_corr_key()
 
@@ -292,7 +370,6 @@ class MonitorView(QWidget, ThreadHelper):
         pg.setConfigOption("foreground", "k")  # black axes, ticks, labels
 
         ncols = math.ceil(math.sqrt(nplots))
-        # nrows = math.ceil(nplots / ncols)
 
         layout = QGridLayout()
         images = []
@@ -347,12 +424,20 @@ class MonitorView(QWidget, ThreadHelper):
             )
         ):
             if occ is not None:
-                occ_rot = np.rot90(occ, k=1).T
-                img.setImage(occ_rot, autoLevels=False)
-                img.setLevels([0, max(1, occ.max())])
+                mask = self.monitor.mask[i]
+                if mask is not None:
+                    display_occ = occ.copy()
+                    display_occ[mask] = 0
+                else:
+                    display_occ = occ
 
-                hits = self.monitor.total_hits[i]  # int(occ.sum())
+                display_rot = np.fliplr(np.rot90(display_occ, k=1).T)
 
+                img.setImage(display_rot, autoLevels=False)
+                img.setLevels([0, max(1, display_occ.max())])
+
+                # Update hit counter
+                hits = self.monitor.total_hits[i]
                 lbl.setText(f"{name}: {hits} hits")
 
         # Correlations

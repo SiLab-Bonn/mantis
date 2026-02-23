@@ -4,6 +4,8 @@ from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
 FIXED_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/fixed_configuration.toml"
 USER_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/user_configuration.toml"
 
+scan_type = ExtTriggerScan
+
 
 def load_merged_config(fixed_file, user_file):
     fixed = toml.load(fixed_file)
@@ -32,8 +34,9 @@ def load_merged_config(fixed_file, user_file):
 
 
 class TJ_Control:
-    def __init__(self, user_config_file=None):
+    def __init__(self, user_config_file=None, scan_type=ExtTriggerScan):
         self.user_config_file = user_config_file or USER_CONFIG_FILE
+        self.scan_type = scan_type
         self.scan_ext = None
         self.load_config()
 
@@ -46,7 +49,7 @@ class TJ_Control:
         self.load_config()
 
         try:
-            self.scan_ext = ExtTriggerScan(
+            self.scan_ext = self.scan_type(
                 bench_config=self.testbench, scan_config=self.scan_conf
             )
         except Exception as e:
@@ -57,16 +60,27 @@ class TJ_Control:
     def configure(self):
         self.initialize()
 
+        if self.scan_ext is None:
+            print("Configuration failed: no scan object")
+            return
+
         try:
-            self.scan_ext._init_environment()
-            self.scan_ext._init_hardware(force=False)
+            if hasattr(self.scan_ext, "_init_environment"):
+                self.scan_ext._init_environment()
+
+            if hasattr(self.scan_ext, "_init_hardware"):
+                self.scan_ext._init_hardware(force=False)
+
             self.scan_ext.initialized = True
 
-            self.scan_ext.configuration["scan"] = self.scan_conf
-            self.scan_ext.configure()
+            if hasattr(self.scan_ext, "configuration"):
+                self.scan_ext.configuration["scan"] = self.scan_conf
+
+            if hasattr(self.scan_ext, "configure"):
+                self.scan_ext.configure()
+
         except Exception as e:
             print("Configuration failed:", e)
-            self.scan_ext = None
 
     # need to shut down before initializing (again) to clear occupied socket connections
     def shutdown(self):
@@ -94,9 +108,14 @@ class TJ_Control:
             print("Not initialized")
             return
 
-        self.scan_ext._init_files()
-        self.scan_ext.stop_scan.clear()
+        if hasattr(self.scan_ext, "_init_files"):
+            self.scan_ext._init_files()
+
+        if hasattr(self.scan_ext, "stop_scan"):
+            self.scan_ext.stop_scan.clear()
+
         self.scan_ext.scan()
+        self.scan_ext.analyze()
 
     def stop_scan(self):
         if self.scan_ext:

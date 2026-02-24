@@ -69,7 +69,9 @@ class OnlineMonitor:
                     "row_row": np.zeros((512, 512), dtype=np.uint32),
                 }
 
-        self.setup_receivers()
+        self._running = False
+        self.receivers = []
+        self.start_receivers()
 
     def load_config(self):
         cfg = toml.load(self.config_file)
@@ -100,8 +102,12 @@ class OnlineMonitor:
 
         return frontends, rx_ids, chip_sn
 
-    def setup_receivers(self):
+    def start_receivers(self):
+        """Create and start TJReceiver instances."""
         from functools import partial
+
+        if self._running:
+            return
 
         self.receivers = []
         for list_index, fe in enumerate(self.frontends):
@@ -109,6 +115,26 @@ class OnlineMonitor:
             receiver.worker.data.connect(partial(self.handle_data, list_index))
             receiver.start()
             self.receivers.append(receiver)
+
+        self._running = True
+
+    def stop_receivers(self):
+        """Stop/close all receivers and mark monitor as not running."""
+        if not self._running:
+            return
+
+        for r in self.receivers:
+            try:
+                # adapt to your TJReceiver API if different
+                if hasattr(r, "stop"):
+                    r.stop()
+                if hasattr(r, "close"):
+                    r.close()
+            except Exception:
+                pass
+
+        self.receivers = []
+        self._running = False
 
     def handle_data(self, list_index, data):
         self.received_data[list_index] = data
@@ -147,15 +173,6 @@ class OnlineMonitor:
         self.total_occupancy[list_index] = occ
         self.last_hits[list_index] = hits
         self.total_hits[list_index] += hits.shape[0]
-
-        # # Apply mask only if mask exists and checkbox is active
-        # if self.mask[list_index] is not None:
-        #     mask = self.mask[list_index]
-        #     display_occ = occ.copy()
-        #     display_occ[mask] = 0
-        #     valid = ~mask[hits["col"], hits["row"]]
-        #     hits = hits[valid]
-        #     self.last_hits[list_index] = hits
 
         if ts is not None:
             for other in range(self.num_chips):

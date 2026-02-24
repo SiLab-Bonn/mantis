@@ -9,6 +9,7 @@ import math
 import sys
 import toml
 import time
+import logging
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QObject, Qt
 from PyQt6.QtWidgets import (
     QApplication,
@@ -131,22 +132,34 @@ class ThreadHelper:
         thread.start()
 
 
+class QtLogHandler(logging.Handler):
+    def __init__(self, gui):
+        super().__init__()
+        self.gui = gui
+
+    def emit(self, record):
+        if self.gui.debugging():
+            msg = self.format(record)
+            self.gui.append_text.emit(msg)
+
+
 class ScanControl(QWidget, ThreadHelper):
     append_text = pyqtSignal(str)
 
-    def __init__(self, controller):
+    def __init__(self, controller, monitor_view=None):
         super().__init__()
         self.TJ = controller
+        self.monitor_view = monitor_view
 
         layout = QVBoxLayout()
 
+        # Scan type selector
         self.SCAN_TYPES = {
             "Analog Scan": AnalogScan,
             "Source Scan": SourceScan,
             "External Trigger Scan": ExtTriggerScan,
         }
 
-        # Scan type selector
         self.scan_selector = QComboBox()
         self.scan_selector.addItems(
             ["External Trigger Scan", "Analog Scan", "Source Scan"]
@@ -180,10 +193,31 @@ class ScanControl(QWidget, ThreadHelper):
             btn.clicked.connect(callback)
             layout.addWidget(btn)
 
+        # Debugging button
+        self.cb_debugging = QCheckBox("Debug Level")
+        self.cb_debugging.stateChanged.connect(self.debugging)
+        layout.addWidget(self.cb_debugging)
+
         # Terminal
         self.terminal = QPlainTextEdit()
         self.terminal.setReadOnly(True)
         layout.addWidget(self.terminal)
+
+        sys.stdout = self
+        sys.stderr = self
+
+        # Logging handler for Debugging
+        self.log_handler = QtLogHandler(self)
+        self.log_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(name)s] - %(levelname)s %(message)s")
+        )
+
+        # Remove all default handlers (otherwise messages appear twice)
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+
+        root_logger.addHandler(self.log_handler)
+        root_logger.setLevel(logging.DEBUG)
 
         # Progress bar
         self.status_label = QLabel("Progress Bar")
@@ -240,7 +274,23 @@ class ScanControl(QWidget, ThreadHelper):
         self.run_in_thread(self.TJ.configure, self.btn_conf)
 
     def start_scan_clicked(self):
-        self.run_in_thread(self.TJ.start_scan, self.btn_start)
+        # pause monitor receivers if available
+        if self.monitor_view is not None and hasattr(self.monitor_view, "monitor"):
+            self.monitor_view.monitor.stop_receivers()
+
+        def run_and_restart():
+            try:
+                self.TJ.start_scan()
+            finally:
+                # restart monitor receivers after scan
+                if self.monitor_view is not None and hasattr(
+                    self.monitor_view, "monitor"
+                ):
+                    self.monitor_view.monitor.start_receivers()
+                    # restart monitor loop thread
+                    self.monitor_view.run_in_thread(self.monitor_view.monitor_loop)
+
+        self.run_in_thread(run_and_restart, self.btn_start)
 
     def stop_scan_clicked(self):
         if hasattr(self.TJ.scan_ext, "stop_scan"):
@@ -251,18 +301,53 @@ class ScanControl(QWidget, ThreadHelper):
             self.log("Stop Scan not available for this scan type")
 
     def handle_error(self, e, button):
+        # Always show error messages
         self.log(f"ERROR: {e}")
         button.set_ready()
 
     def log(self, text):
+        # Always show gui generated messages
         self.terminal.appendPlainText(text)
 
     def write(self, text):
-        if text.strip():
+        """
+        This receives ALL stdout/stderr output:
+        - print()
+        - tqdm
+        - warnings
+        - exceptions
+        - anything from background threads
+        """
+
+        # Filter empty lines
+        if not text.strip():
+            return
+
+        # If debugging mode is ON → show EVERYTHING
+        if self.debugging():
+            self.append_text.emit(text)
+            return
+
+        # If debugging mode is OFF → only show selected messages
+        important = [
+            "ERROR",
+            "Warning",
+            "Scan started",
+            "Scan stopped",
+            "Scan complete",
+            "Initialization complete",
+            "Configuration complete",
+        ]
+
+        if any(key in text for key in important):
             self.append_text.emit(text)
 
-    def flush(self):
-        pass
+    def debugging(self):
+        return self.cb_debugging.isChecked()
+        # if self.cb_debugging.isChecked():
+        #     pass
+        # else:
+        #     pass
 
 
 # class Powering(QWidget):
@@ -408,7 +493,7 @@ class MonitorView(QWidget, ThreadHelper):
         self.current_corr_key = (min(a, b), max(a, b))
 
     def monitor_loop(self):
-        while True:
+        while self.monitor._running:
             for i in range(self.monitor.num_chips):
                 self.monitor.process_receiver(i)
             time.sleep(0.01)
@@ -571,6 +656,10 @@ class MainWindow(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.TJ = controller
+
+        self.page_configuration = Configuration(self.TJ)
+        self.page_monitor = MonitorView(self.TJ)
+        self.page_scancontrol = ScanControl(self.TJ, monitor_view=self.page_monitor)
 
         # fmt: off
         # Page specification format:

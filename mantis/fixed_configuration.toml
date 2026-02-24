@@ -7,7 +7,7 @@ use_good_pixels_diff = false
 readout_system = ""
 
 [scan_configuration]
-tot_calib_file = ""
+# tot_calib_file = ""
 
 [TLU]
 TRIGGER_MODE = 3 # Selecting trigger mode: Use trigger inputs/trigger select (0), TLU no handshake (1), TLU simple handshake (2), TLU data handshake (3)

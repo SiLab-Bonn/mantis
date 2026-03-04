@@ -97,8 +97,7 @@ class Worker(QObject):
 
 
 class ThreadHelper:
-    def run_in_thread(self, fn, button=None):
-        # Create thread + worker
+    def run_in_thread(self, fn, button=None, finished_callback=None):
         thread = QThread()
         worker = Worker(fn)
 
@@ -108,27 +107,24 @@ class ThreadHelper:
         self.threads.append(worker)
 
         worker.moveToThread(thread)
-
-        # Start worker when thread starts
         thread.started.connect(worker.run)
 
         if button is not None:
             worker.error.connect(lambda e: self.handle_error(e, button))
-
-        # Button ready + message printing
-        if button is not None:
             worker.finished.connect(lambda: button.set_ready())
             worker.finished.connect(lambda: self.log(button.message))
 
-        # Cleanup
+        if finished_callback is not None:
+            worker.finished.connect(finished_callback)
+
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self.threads.remove(thread))
 
-        # Start thread
         if button is not None:
             button.set_busy()
+
         thread.start()
 
 
@@ -271,24 +267,15 @@ class ScanControl(QWidget, ThreadHelper):
     def configure_clicked(self):
         self.TJ.load_config()
 
-        self.run_in_thread(self.TJ.configure, self.btn_conf)
+        self.run_in_thread(
+            self.TJ.configure,
+            self.btn_conf,
+            finished_callback=lambda: self.monitor_view.reload_monitor(),
+        )
 
     def start_scan_clicked(self):
-        # pause monitor receivers if available
-        if self.monitor_view is not None and hasattr(self.monitor_view, "monitor"):
-            self.monitor_view.monitor.stop_receivers()
-
         def run_and_restart():
-            try:
-                self.TJ.start_scan()
-            finally:
-                # restart monitor receivers after scan
-                if self.monitor_view is not None and hasattr(
-                    self.monitor_view, "monitor"
-                ):
-                    self.monitor_view.monitor.start_receivers()
-                    # restart monitor loop thread
-                    self.monitor_view.run_in_thread(self.monitor_view.monitor_loop)
+            self.TJ.start_scan()
 
         self.run_in_thread(run_and_restart, self.btn_start)
 
@@ -344,10 +331,6 @@ class ScanControl(QWidget, ThreadHelper):
 
     def debugging(self):
         return self.cb_debugging.isChecked()
-        # if self.cb_debugging.isChecked():
-        #     pass
-        # else:
-        #     pass
 
 
 # class Powering(QWidget):
@@ -375,7 +358,6 @@ class MonitorView(QWidget, ThreadHelper):
 
         # Backend
         self.monitor = OnlineMonitor(self.TJ.user_config_file)
-        num = self.monitor.num_chips
         chip_names = self.monitor.chip_sn
 
         # --- Tabs ---
@@ -386,21 +368,9 @@ class MonitorView(QWidget, ThreadHelper):
         # PAGE 1: Hitmaps
         # -------------------------
         page_hits = QWidget()
-        page_hits_layout = QVBoxLayout(page_hits)
-
-        # Hitmap grid
-        grid_layout, self.imgs = self.create_pg_grid(num, chip_names)
-        page_hits_layout.addLayout(grid_layout)
-
-        # Counters
-        self.hit_labels = []
-        counter_row = QHBoxLayout()
-        for name in chip_names:
-            lbl = QLabel(f"{name}: 0 hits")
-            lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
-            self.hit_labels.append(lbl)
-            counter_row.addWidget(lbl)
-        page_hits_layout.addLayout(counter_row)
+        self.page_hits_layout = QVBoxLayout(page_hits)
+        self.counter_row = QHBoxLayout()
+        self.page_hits_layout.addLayout(self.counter_row)
 
         tabs.addTab(page_hits, "Hitmaps")
 
@@ -408,38 +378,32 @@ class MonitorView(QWidget, ThreadHelper):
         # PAGE 2: Correlations
         # -------------------------
         page_corr = QWidget()
-        page_corr_layout = QVBoxLayout(page_corr)
+        self.page_corr_layout = QVBoxLayout(page_corr)
 
         # Detector selector
         selector_row = QHBoxLayout()
         self.detA = QComboBox()
         self.detB = QComboBox()
 
-        for i, name in enumerate(chip_names):
-            self.detA.addItem(f"{i} – {name}", i)
-            self.detB.addItem(f"{i} – {name}", i)
-
-        self.detA.setCurrentIndex(0)
-        self.detB.setCurrentIndex(1 if num > 1 else 0)
-
-        self.detA.currentIndexChanged.connect(self.update_corr_key)
-        self.detB.currentIndexChanged.connect(self.update_corr_key)
-
         selector_row.addWidget(QLabel("Detector A:"))
         selector_row.addWidget(self.detA)
         selector_row.addWidget(QLabel("Detector B:"))
         selector_row.addWidget(self.detB)
-        page_corr_layout.addLayout(selector_row)
+
+        self.page_corr_layout.addLayout(selector_row)
 
         # Correlation plots
         corr_layout, corr_imgs = self.create_pg_grid(2, ["Col–Col", "Row–Row"])
         self.col_img, self.row_img = corr_imgs
-        page_corr_layout.addLayout(corr_layout)
+        self.page_corr_layout.addLayout(corr_layout)
 
         tabs.addTab(page_corr, "Correlations")
 
+        self.make_hitmaps(chip_names)
+        self.make_correlators(chip_names)
+
         # Initialize correlation key
-        self.current_corr_key = (0, 1) if num > 1 else (0, 0)
+        self.current_corr_key = (0, 1) if len(chip_names) > 1 else (0, 0)
         self.update_corr_key()
 
         # Backend thread
@@ -483,6 +447,49 @@ class MonitorView(QWidget, ThreadHelper):
             images.append(img)
 
         return layout, images
+
+    def make_hitmaps(self, chip_names):
+        num = len(chip_names)
+
+        # Remove old grid if present
+        if hasattr(self, "imgs"):
+            old_item = self.page_hits_layout.takeAt(0)
+            if old_item:
+                while old_item.count():
+                    child = old_item.takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+
+        # Create new grid
+        grid_layout, self.imgs = self.create_pg_grid(num, chip_names)
+        self.page_hits_layout.insertLayout(0, grid_layout)
+
+        # Rebuild counters
+        for lbl in getattr(self, "hit_labels", []):
+            lbl.deleteLater()
+
+        self.hit_labels = []
+        for name in chip_names:
+            lbl = QLabel(f"{name}: 0 hits")
+            lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+            self.hit_labels.append(lbl)
+            self.counter_row.addWidget(lbl)
+
+    def make_correlators(self, chip_names):
+        self.detA.blockSignals(True)
+        self.detB.blockSignals(True)
+
+        self.detA.clear()
+        self.detB.clear()
+
+        for i, name in enumerate(chip_names):
+            self.detA.addItem(f"{i} – {name}", i)
+            self.detB.addItem(f"{i} – {name}", i)
+
+        self.detA.blockSignals(False)
+        self.detB.blockSignals(False)
+
+        self.update_corr_key()
 
     def update_corr_key(self):
         a = self.detA.currentData()
@@ -558,6 +565,23 @@ class MonitorView(QWidget, ThreadHelper):
         else:
             # Disable masking
             self.monitor.mask = [None] * self.monitor.num_chips
+
+    # reload after configuration change
+    def reload_monitor(self):
+        if hasattr(self, "monitor") and self.monitor is not None:
+            self.monitor.stop_receivers()
+            self.monitor._running = False
+            time.sleep(0.05)
+
+        self.monitor = OnlineMonitor(self.TJ.user_config_file)
+        self.monitor.start_receivers()
+
+        chip_names = self.monitor.chip_sn
+
+        self.make_hitmaps(chip_names)
+        self.make_correlators(chip_names)
+
+        self.run_in_thread(self.monitor_loop)
 
 
 class Configuration(QWidget):
@@ -671,9 +695,9 @@ class MainWindow(QWidget):
         # )
         pages = [
             # ("Powering", Powering(), "Powering", "green"),
-            ("Configuration", Configuration(self.TJ), "Configuration", "green"),
-            ("ScanControl", ScanControl(self.TJ), "Scan Control", "green"),
-            ("MonitorView", MonitorView(self.TJ), "Online Monitor", "green"),
+            ("Configuration", self.page_configuration, "Configuration", "green"),
+            ("ScanControl", self.page_scancontrol, "Scan Control", "green"),
+            ("MonitorView", self.page_monitor, "Online Monitor", "green"),
         ]
         #  fmt: on
 

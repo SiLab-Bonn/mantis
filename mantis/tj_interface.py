@@ -1,8 +1,11 @@
 import toml
 from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
+from pathlib import Path
 
-FIXED_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/fixed_configuration.toml"
-USER_CONFIG_FILE = "/home/wiebke/git/mantis/mantis/user_configuration.toml"
+BASE_DIR = Path(__file__).resolve().parent
+
+FIXED_CONFIG_FILE = BASE_DIR / "fixed_configuration.toml"
+USER_CONFIG_FILE = BASE_DIR / "user_configuration.toml"
 
 scan_type = ExtTriggerScan
 

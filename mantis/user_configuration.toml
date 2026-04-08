@@ -10,6 +10,41 @@ stop_row = 512
 scan_timeout = 10 # Timeout for scan after which the scan will be stopped, in seconds; if False no limit on scan time
 max_triggers = false # Number of maximum received triggers after stopping readout, if False no limit on received trigger
 
+[powering]  # Additional/Other power supply files may be found here and copied to lab_devices:
+            # https://github.com/SiLab-Bonn/basil/tree/master/basil/HL
+
+# [powering.devices.keithley1]
+# name = "HV1"
+# yaml = "mantis/power_devices/keithley2410_pyserial.yaml"
+# connection = "port=/dev/ttyUSB0;baudrate=19200;read_termination=\r\n"
+# channels = 1
+# comment = "High voltage supply #1"
+# max_voltage = 1000
+# max_current = 0.01
+# ocp = true
+
+[powering.devices.keithley2400]
+name = "Keithley2400"
+yaml = "mantis/power_devices/keithley2400_pyserial.yaml"
+connection = "port=/dev/ttyUSB0"
+channels = 1
+comment = "High voltage supply #2"
+max_voltage = 10
+max_current = 0.001
+ocp = true
+
+
+# [powering.devices.tti]
+# name = "TTI QL355TP"
+# yaml = "mantis/power_devices/ttiql355tp.yaml"
+# comment = ""
+# channels = 3
+
+# [powering.devices.tti.channel_comments]
+# ch1 = "Psub/Pwell for detector XY"
+# ch2 = "Power supply for BQAD board"
+# ch3 = "Psub/Pwell for detector XY"
+
 [modules]
 [modules.module_0]
 identifier = "unknown"
@@ -32,13 +67,12 @@ send_data = "tcp://127.0.0.1:6500"
 # chip_sn = "W18R05"
 # chip_id = 0
 # receiver = "rx3"
-# chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists
-# send_data = "tcp://127.0.0.1:5500"
+# chip_config_file = ""
+# send_data = "tcp://127.0.0.1:7500"
 
-# # Example for adding more chips:
 # [modules.module_0.chip_3]
 # chip_sn = "W14R13"
 # chip_id = 1
 # receiver = "rx3"
 # chip_config_file = ""
-# send_data = "tcp://127.0.0.1:6500"
+# send_data = "tcp://127.0.0.1:8500"

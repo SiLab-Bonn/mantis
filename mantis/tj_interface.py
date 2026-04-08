@@ -1,6 +1,6 @@
 import toml
-from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
 from pathlib import Path
+from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -38,9 +38,18 @@ def load_merged_config(fixed_file, user_file):
 
 class TJ_Control:
     def __init__(self, user_config_file=None, scan_type=ExtTriggerScan):
-        self.user_config_file = user_config_file or USER_CONFIG_FILE
+        # Always resolve the main config file ONCE
+        if user_config_file is None:
+            self.main_config_file = USER_CONFIG_FILE
+        else:
+            self.main_config_file = user_config_file
+
+        # Never let chip config fields overwrite this
+        self.user_config_file = self.main_config_file
+
         self.scan_type = scan_type
         self.scan_ext = None
+
         self.load_config()
 
     def load_config(self):

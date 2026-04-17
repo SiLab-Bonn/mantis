@@ -211,10 +211,11 @@ class ThreadManager:
 class ScanControl(QWidget):
     append_text = pyqtSignal(str)
 
-    def __init__(self, controller, monitor_view=None):
+    def __init__(self, controller, monitor_view=None, powering_view=None):
         super().__init__()
         self.TJ = controller
         self.monitor_view = monitor_view
+        self.powering_view = powering_view
         self.button_manager = ButtonManager()
         self.messages = Messages(self.append_text, self.debugging)
         self.thread_manager = ThreadManager(self.messages)
@@ -327,7 +328,10 @@ class ScanControl(QWidget):
         self.thread_manager.run_in_thread(
             self.TJ.configure,
             self.btn_conf,
-            finished_callback=lambda: self.monitor_view.reload_monitor(),
+            finished_callback=lambda: (
+                self.monitor_view.reload_monitor(),
+                self.powering_view.reload_powering(),
+            ),
         )
 
     def start_scan_clicked(self):
@@ -353,65 +357,60 @@ class ScanControl(QWidget):
 class Powering(QWidget):
     append_text = pyqtSignal(str)
 
-    def __init__(self, manager):
+    def __init__(self, controller):
         super().__init__()
-        self.manager = manager
+        self.TJ = controller
         self.button_manager = ButtonManager()
         self.messages = Messages(self.append_text, lambda: False)
         self.thread_manager = ThreadManager(self.messages)
 
-        self._readback_timers = []
+        self.timers = []
 
-        layout = QVBoxLayout()
-        self.setLayout(layout)
+        main_layout = QVBoxLayout()
+        self.setLayout(main_layout)
 
-        # Build device panels
-        for dev in self.manager.devices:
-            panel = self.make_device_panel(dev)
-            layout.addWidget(panel)
+        # Device row
+        self.device_row = QHBoxLayout()
+        main_layout.addLayout(self.device_row)
 
         # Terminal
         self.terminal = QPlainTextEdit()
         self.terminal.setReadOnly(True)
-        layout.addWidget(self.terminal)
+        main_layout.addWidget(self.terminal)
 
-        layout.addStretch()
-
-        # Logging
         self.append_text.connect(self.terminal.appendPlainText)
 
-    def make_device_panel(self, dev):
-        box = QGroupBox(dev["name"])
+        # Build UI from config
+        self.reload_powering()
+
+    def make_device_panel(self, device):
+        box = QGroupBox(f"{device.device_id} – {device.name}")
         vbox = QVBoxLayout(box)
 
-        # Device comment
-        lbl_comment = QLabel(dev["comment"])
-        lbl_comment.setStyleSheet("color: gray")
-        vbox.addWidget(lbl_comment)
+        if device.meta.get("comment"):
+            lbl_comment = QLabel(device.meta["comment"])
+            lbl_comment.setStyleSheet("color: gray")
+            vbox.addWidget(lbl_comment)
 
-        # Channels
-        for ch_name in dev["dut"].keys():
-            ch_box = self.make_channel_panel(dev, ch_name)
+        for channel_id in device.channels.keys():
+            ch_box = self.make_channel_panel(device, channel_id)
             vbox.addWidget(ch_box)
 
         return box
 
-    def make_channel_panel(self, dev, ch_name):
-        block = dev["dut"][ch_name]
-
-        box = QGroupBox(f"Channel {ch_name}")
+    def make_channel_panel(self, device, channel_id):
+        box = QGroupBox(f"Channel {channel_id}")
         outer = QVBoxLayout(box)
 
         # Settings
         settings_frame = QFrame()
         settings_frame.setFrameShape(QFrame.Shape.Box)
-        settings_frame.setLineWidth(1)
         settings_layout = QGridLayout(settings_frame)
 
         vset = QLineEdit("0.0")
         iset = QLineEdit("0.0")
 
-        settings_layout.addWidget(QLabel("Voltage Setpoint [V]"), 0, 0)
+        settings_layout.addWidget(QLabel("Voltage [V]"), 0, 0)
         settings_layout.addWidget(vset, 0, 1)
 
         settings_layout.addWidget(QLabel("Current Limit [A]"), 1, 0)
@@ -423,14 +422,12 @@ class Powering(QWidget):
         # Readback
         read_frame = QFrame()
         read_frame.setFrameShape(QFrame.Shape.Box)
-        read_frame.setLineWidth(1)
         read_layout = QGridLayout(read_frame)
 
         read_v = QLabel("—")
         read_i = QLabel("—")
         read_ilim = QLabel("—")
 
-        # Make readback bold and aligned
         for lbl in (read_v, read_i, read_ilim):
             lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
 
@@ -446,6 +443,7 @@ class Powering(QWidget):
         outer.addWidget(QLabel("Live Readback"))
         outer.addWidget(read_frame)
 
+        # Buttons
         # fmt: off
         # Button specification format:
         # (
@@ -457,9 +455,9 @@ class Powering(QWidget):
         #   Threading:                  # indicates whether the task should be threaded or not
         # )
         button_specs = [
-            ("btn_apply", "Apply Settings", "green", lambda: self.apply_settings(block, vset, iset, dev), "Settings applied", True),
-            ("btn_on", "Output ON", "green", lambda: block.on() if hasattr(block, "on") else block.write("OUTP ON"), "Output enabled", True),
-            ("btn_off", "Output OFF", "green", lambda: block.off() if hasattr(block, "off") else block.write("OUTP OFF"), "Output disabled", True),
+            ("btn_apply", "Apply Settings", "green", lambda: self._apply_settings(device.device_id, channel_id, vset, iset), "Settings applied", True),
+            ("btn_on", "Output ON", "green", lambda ch=self.manager.devices[device.device_id].channels[channel_id]: ch.on(), "Output enabled", True),
+            ("btn_off", "Output OFF", "green", lambda ch=self.manager.devices[device.device_id].channels[channel_id]: ch.off(), "Output disabled", True),
         ]
         # fmt: on
 
@@ -467,116 +465,81 @@ class Powering(QWidget):
             button_specs, target=self, layout=outer, thread_manager=self.thread_manager
         )
 
-        # readback timer
+        # Readback timer
         timer = QTimer(self)
         timer.timeout.connect(
-            lambda: self.update_readback(block, read_v, read_i, read_ilim)
+            lambda: self._update_readback(
+                device.device_id, channel_id, read_v, read_i, read_ilim
+            )
         )
-        timer.start(300)
-        self._readback_timers.append(timer)
+        timer.start(500)
+        self.timers.append(timer)
 
         return box
 
-    def apply_settings(self, block, vset, iset, dev):
-        v = float(vset.text())
-        i = float(iset.text())
+    def _apply_settings(self, device_id, channel_id, vset, iset):
+        voltage = float(vset.text())
+        current = float(iset.text())
+        self.manager.apply_settings(device_id, channel_id, voltage, current)
 
-        # Safety checks
-        if dev["max_voltage"] and v > dev["max_voltage"]:
-            raise ValueError("Voltage exceeds limit")
-        if dev["max_current"] and i > dev["max_current"]:
-            raise ValueError("Current limit exceeds allowed maximum")
+    def _update_readback(self, device_id, channel_id, lbl_v, lbl_i, lbl_ilim):
+        rb = self.manager.readback(device_id, channel_id)
 
-        # Source voltage mode
-        if hasattr(block, "source_volt"):
-            block.source_volt()
+        lbl_v.setText(self.format_value(rb["voltage"], "V"))
+        lbl_i.setText(self.format_value(rb["current"], "A"))
+        lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
 
-        # Ensure voltage range is wide enough
-        if hasattr(block, "set_voltage_range"):
-            # pick the smallest range that fits the requested voltage
-            abs_v = abs(v)
-            if abs_v <= 0.2:
-                block.set_voltage_range(0.2)
-            elif abs_v <= 2:
-                block.set_voltage_range(2)
-            elif abs_v <= 20:
-                block.set_voltage_range(20)
-            else:
-                block.set_voltage_range(200)
+    # reload after configuration change
+    def reload_powering(self):
+        # Stop timers
+        for t in self.timers:
+            t.stop()
+            t.deleteLater()
+        self.timers.clear()
 
-        # Apply settings
-        if hasattr(block, "set_voltage"):
-            block.set_voltage(v)
-        if hasattr(block, "set_current_limit"):
-            block.set_current_limit(i)
+        # Recreate backend
+        self.manager = PowerSupplyManager(self.TJ.user_config_file)
+        self.manager.load()
 
-    def update_readback(self, block, lbl_v, lbl_i, lbl_ilim):
-        if not self.is_output_on(block):
-            lbl_v.setText("—")
-            lbl_i.setText("—")
-            lbl_ilim.setText("—")
-            return
+        # Clear device row
+        while self.device_row.count():
+            item = self.device_row.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
 
-        try:
-            # Voltage (CSV → take field 0)
-            if hasattr(block, "get_voltage"):
-                raw_v = block.get_voltage()
-                parts_v = str(raw_v).split(",")
-                val_v = float(parts_v[0]) if parts_v else None
-                lbl_v.setText(self.format_value(val_v, "V"))
+        # Rebuild device panels
+        for device in self.manager.devices.values():
+            panel = self.make_device_panel(device)
+            self.device_row.addWidget(panel)
 
-            # Current (patched → already float)
-            try:
-                val_i = float(block.get_current())
-            except Exception:
-                val_i = None
-            lbl_i.setText(self.format_value(val_i, "A"))
+        self.device_row.addStretch()
 
-            # Current limit (scalar)
-            if hasattr(block, "get_current_limit"):
-                try:
-                    val_ilim = float(block.get_current_limit())
-                except Exception:
-                    val_ilim = None
-                lbl_ilim.setText(self.format_value(val_ilim, "A"))
-
-        except Exception as e:
-            self.messages.log(f"Readback error: {e}")
-
-    def is_output_on(self, block):
-        try:
-            if hasattr(block, "get_on"):
-                return block.get_on().strip() in ("1", "ON")
-        except Exception:
-            pass
-        return False
-
-    # auto scaling
+    # Formatting
     def format_value(self, val, unit=""):
         if val is None:
             return "—"
 
         absval = abs(val)
 
-        # Ampere scaling
         if unit == "A":
-            if absval >= 1e-3:
-                return f"{val:.6f} A"
+            if absval >= 1:
+                return f"{val:.3f} A"
+            elif absval >= 1e-3:
+                return f"{val * 1e3:.3f} mA"
             elif absval >= 1e-6:
                 return f"{val * 1e6:.3f} µA"
-            elif absval >= 1e-9:
+            else:
                 return f"{val * 1e9:.3f} nA"
 
-        # Voltage scaling
         if unit == "V":
             if absval >= 1:
-                return f"{val:.6f} V"
+                return f"{val:.3f} V"
             elif absval >= 1e-3:
                 return f"{val * 1e3:.3f} mV"
             else:
                 return f"{val * 1e6:.3f} µV"
 
-        # Generic fallback
         return f"{val:.6f} {unit}"
 
 
@@ -921,9 +884,11 @@ class MainWindow(QWidget):
         self.button_manager = ButtonManager()
 
         self.page_configuration = Configuration(self.TJ)
+        self.page_powering = Powering(self.TJ)
         self.page_monitor = MonitorView(self.TJ)
-        self.page_scancontrol = ScanControl(self.TJ, monitor_view=self.page_monitor)
-        self.page_powering = Powering(self.power_manager)
+        self.page_scancontrol = ScanControl(
+            self.TJ, monitor_view=self.page_monitor, powering_view=self.page_powering
+        )
 
         # fmt: off
         # Page specification format:

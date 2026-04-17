@@ -13,26 +13,26 @@ max_triggers = false # Number of maximum received triggers after stopping readou
 [powering]  # Additional/Other power supply files may be found here and copied to lab_devices:
             # https://github.com/SiLab-Bonn/basil/tree/master/basil/HL
 
-# [powering.devices.keithley1]
-# name = "HV1"
-# yaml = "mantis/power_devices/keithley2410_pyserial.yaml"
-# connection = "port=/dev/ttyUSB0;baudrate=19200;read_termination=\r\n"
-# channels = 1
-# comment = "High voltage supply #1"
-# max_voltage = 1000
-# max_current = 0.01
-# ocp = true
 
 [powering.devices.keithley2400]
 name = "Keithley2400"
 yaml = "mantis/power_devices/keithley2400_pyserial.yaml"
 connection = "port=/dev/ttyUSB0"
 channels = 1
-comment = "High voltage supply #2"
+comment = "High voltage supply W18R05"
 max_voltage = 10
 max_current = 0.001
 ocp = true
 
+[powering.devices.keithley2410]
+name = "Keithley2410"
+yaml = "mantis/power_devices/keithley2410_pyserial.yaml"
+connection = "port=/dev/ttyUSB1"
+channels = 1
+comment = "High voltage supply W14R13"
+max_voltage = 10
+max_current = 0.001
+ocp = true
 
 # [powering.devices.tti]
 # name = "TTI QL355TP"

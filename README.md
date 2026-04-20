@@ -8,7 +8,7 @@ It is designed to offer an intuitive workflow for data acquisition, configuratio
 
 # Installation
 
-MANTIS requires access to the tj-monopix2-daq repository.
+MANTIS requires access to the tj-monopix2-daq and basil repository.
 Clone and install both repositories in editable mode:
 
 ```bash
@@ -16,7 +16,11 @@ git clone https://github.com/SiLab-Bonn/tj-monopix2-daq.git
 cd tj-monopix2-daq
 pip install -e .
 ```
-
+```bash
+git clone https://github.com/SiLab-Bonn/basil.git
+cd basil
+pip install -e .
+```
 ```bash
 git clone https://github.com/SiLab-Bonn/mantis.git
 cd mantis

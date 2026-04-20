@@ -11,6 +11,7 @@ import os
 import toml
 import time
 import logging
+import ast
 from PyQt6.QtCore import pyqtSignal, QTimer, QThread, QObject, Qt
 from PyQt6.QtWidgets import (
     QApplication,
@@ -365,27 +366,31 @@ class Powering(QWidget):
         self.thread_manager = ThreadManager(self.messages)
 
         self.timers = []
+        self.readback_labels = {}
 
         main_layout = QVBoxLayout()
         self.setLayout(main_layout)
 
-        # Device row
-        self.device_row = QHBoxLayout()
-        main_layout.addLayout(self.device_row)
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
 
         # Terminal
         self.terminal = QPlainTextEdit()
         self.terminal.setReadOnly(True)
         main_layout.addWidget(self.terminal)
 
-        self.append_text.connect(self.terminal.appendPlainText)
+        # self.append_text.connect(self.terminal.appendPlainText)
+        self.append_text.connect(self._handle_append_text)
 
         # Build UI from config
         self.reload_powering()
+        # Start unified background polling
+        self.thread_manager.run_in_thread(self._poll_all_devices)
 
     def make_device_panel(self, device):
-        box = QGroupBox(f"{device.device_id} – {device.name}")
-        vbox = QVBoxLayout(box)
+        page = QWidget()
+        hbox = QHBoxLayout()
+        vbox = QVBoxLayout(page)
 
         if device.meta.get("comment"):
             lbl_comment = QLabel(device.meta["comment"])
@@ -394,13 +399,24 @@ class Powering(QWidget):
 
         for channel_id in device.channels.keys():
             ch_box = self.make_channel_panel(device, channel_id)
-            vbox.addWidget(ch_box)
+            hbox.addWidget(ch_box)
 
-        return box
+        hbox.addStretch()
+        vbox.addLayout(hbox)
+        vbox.addStretch()
+
+        return page
 
     def make_channel_panel(self, device, channel_id):
         box = QGroupBox(f"Channel {channel_id}")
         outer = QVBoxLayout(box)
+
+        # Add channel comment if present
+        comment = device.meta["channel_comments"].get(channel_id, "")
+        if comment:
+            lbl = QLabel(comment)
+            lbl.setStyleSheet("color: gray")
+            outer.addWidget(lbl)
 
         # Settings
         settings_frame = QFrame()
@@ -440,6 +456,12 @@ class Powering(QWidget):
         read_layout.addWidget(QLabel("Compliance"), 2, 0)
         read_layout.addWidget(read_ilim, 2, 1)
 
+        self.readback_labels[(device.device_id, channel_id)] = (
+            read_v,
+            read_i,
+            read_ilim,
+        )
+
         outer.addWidget(QLabel("Live Readback"))
         outer.addWidget(read_frame)
 
@@ -455,25 +477,15 @@ class Powering(QWidget):
         #   Threading:                  # indicates whether the task should be threaded or not
         # )
         button_specs = [
-            ("btn_apply", "Apply Settings", "green", lambda: self._apply_settings(device.device_id, channel_id, vset, iset), "Settings applied", True),
-            ("btn_on", "Output ON", "green", lambda ch=self.manager.devices[device.device_id].channels[channel_id]: ch.on(), "Output enabled", True),
-            ("btn_off", "Output OFF", "green", lambda ch=self.manager.devices[device.device_id].channels[channel_id]: ch.off(), "Output disabled", True),
+            ("btn_apply", "Apply Settings", "green", lambda: self._apply_settings(device.device_id, channel_id, vset, iset), f"[{device.name, channel_id}]: Settings applied", True),
+            ("btn_on", "Output ON", "green",  lambda d=device.device_id, c=channel_id: self._set_output(d, c, 1), f"[{device.name, channel_id}]: Output enabled", True),
+            ("btn_off", "Output OFF", "green",  lambda d=device.device_id, c=channel_id: self._set_output(d, c, 0), f"[{device.name, channel_id}]: Output disabled", True),
         ]
         # fmt: on
 
         self.button_manager.make(
             button_specs, target=self, layout=outer, thread_manager=self.thread_manager
         )
-
-        # Readback timer
-        timer = QTimer(self)
-        timer.timeout.connect(
-            lambda: self._update_readback(
-                device.device_id, channel_id, read_v, read_i, read_ilim
-            )
-        )
-        timer.start(500)
-        self.timers.append(timer)
 
         return box
 
@@ -482,38 +494,21 @@ class Powering(QWidget):
         current = float(iset.text())
         self.manager.apply_settings(device_id, channel_id, voltage, current)
 
-    def _update_readback(self, device_id, channel_id, lbl_v, lbl_i, lbl_ilim):
-        rb = self.manager.readback(device_id, channel_id)
-
-        lbl_v.setText(self.format_value(rb["voltage"], "V"))
-        lbl_i.setText(self.format_value(rb["current"], "A"))
-        lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
-
     # reload after configuration change
     def reload_powering(self):
-        # Stop timers
         for t in self.timers:
             t.stop()
             t.deleteLater()
         self.timers.clear()
 
-        # Recreate backend
         self.manager = PowerSupplyManager(self.TJ.user_config_file)
         self.manager.load()
 
-        # Clear device row
-        while self.device_row.count():
-            item = self.device_row.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        # Rebuild device panels
+        self.tabs.clear()
         for device in self.manager.devices.values():
-            panel = self.make_device_panel(device)
-            self.device_row.addWidget(panel)
-
-        self.device_row.addStretch()
+            self.tabs.addTab(
+                self.make_device_panel(device), f"{device.device_id} – {device.name}"
+            )
 
     # Formatting
     def format_value(self, val, unit=""):
@@ -541,6 +536,44 @@ class Powering(QWidget):
                 return f"{val * 1e6:.3f} µV"
 
         return f"{val:.6f} {unit}"
+
+    def _set_output(self, device_id, channel_id, state):
+        ch = self.manager.devices[device_id].channels[channel_id]
+        if isinstance(ch, tuple):
+            drv, idx = ch
+            drv.set_enable(state, idx)
+        else:
+            (ch.on if state else ch.off)()
+
+    def _poll_all_devices(self):
+        data = {
+            dev_id: {
+                ch_id: self.manager.readback(dev_id, ch_id)
+                for ch_id in dev.channels.keys()
+            }
+            for dev_id, dev in self.manager.devices.items()
+        }
+
+        self.append_text.emit("__UPDATE_READBACK__" + repr(data))
+
+        time.sleep(0.5)
+        self.thread_manager.run_in_thread(self._poll_all_devices)
+
+    def _handle_append_text(self, text):
+        if text.startswith("__UPDATE_READBACK__"):
+            payload = text.replace("__UPDATE_READBACK__", "")
+            data = ast.literal_eval(payload)
+            self._update_all_readbacks(data)
+        else:
+            self.terminal.appendPlainText(text)
+
+    def _update_all_readbacks(self, data):
+        for dev_id, channels in data.items():
+            for ch_id, rb in channels.items():
+                lbl_v, lbl_i, lbl_ilim = self.readback_labels[(dev_id, ch_id)]
+                lbl_v.setText(self.format_value(rb["voltage"], "V"))
+                lbl_i.setText(self.format_value(rb["current"], "A"))
+                lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
 
 
 class MonitorView(QWidget):

@@ -17,9 +17,6 @@ class PowerDevice:
         self.channels = channels
         self.meta = meta
 
-    def __repr__(self):
-        return f"<PowerDevice {self.device_id} ({self.name})>"
-
 
 class PowerSupplyManager:
     def __init__(self, config_file):
@@ -57,6 +54,7 @@ class PowerSupplyManager:
                 dut = Dut(yaml_data)
                 dut.init()
                 driver_name = dut._conf["hw_drivers"][0]["name"]
+                driver_type = dut._conf["hw_drivers"][0]["type"]
                 driver = dut[driver_name]
                 initialized = True
             except Exception as e:
@@ -66,21 +64,23 @@ class PowerSupplyManager:
 
             nch = entry.get("channels", 1)
             if driver is not None:
-                if nch == 1:
-                    channels["CH0"] = driver
-                else:
+                driver_type = dut._conf["hw_drivers"][0]["type"].lower()
+
+                if driver_type.startswith("tti"):
+                    # TTi QL355TP → keine Channel-Objekte, 1‑based API
                     for ch in range(nch):
-                        try:
-                            block = driver[ch]
-                        except Exception:
+                        channels[f"CH{ch}"] = (driver, ch + 1)
+                else:
+                    # Keithley & andere → unverändert
+                    if nch == 1:
+                        channels["CH0"] = driver
+                    else:
+                        for ch in range(nch):
                             try:
-                                block = driver.channel(ch)
+                                block = driver[ch]
                             except Exception:
-                                raise RuntimeError(
-                                    f"Device {device_id} declares {nch} channels "
-                                    f"but driver does not support indexing."
-                                )
-                        channels[f"CH{ch}"] = block
+                                block = driver.channel(ch)
+                            channels[f"CH{ch}"] = block
             else:
                 for ch in range(nch):
                     channels[f"CH{ch}"] = None
@@ -91,6 +91,7 @@ class PowerSupplyManager:
                 "ocp": entry.get("ocp"),
                 "comment": entry.get("comment", ""),
                 "initialized": initialized,
+                "channel_comments": entry.get("channel_comments", {}),
             }
 
             device = PowerDevice(
@@ -107,37 +108,59 @@ class PowerSupplyManager:
         dev = self.devices[device_id]
         ch = dev.channels[channel_id]
 
+        if isinstance(ch, tuple):
+            drv, idx = ch  # TTi
+        else:
+            drv, idx = ch, None  # Keithley
+
         if dev.meta["max_voltage"] and voltage > dev.meta["max_voltage"]:
             raise ValueError(f"Voltage exceeds limit for {device_id}")
         if dev.meta["max_current"] and current > dev.meta["max_current"]:
             raise ValueError(f"Current exceeds limit for {device_id}")
 
-        if hasattr(ch, "source_volt"):
-            ch.source_volt()
+        # Keithley: optional range selection
+        if idx is None and hasattr(drv, "source_volt"):
+            drv.source_volt()
 
-        if hasattr(ch, "set_voltage_range"):
+        if idx is None and hasattr(drv, "set_voltage_range"):
             abs_v = abs(voltage)
             if abs_v <= 0.2:
-                ch.set_voltage_range(0.2)
+                drv.set_voltage_range(0.2)
             elif abs_v <= 2:
-                ch.set_voltage_range(2)
+                drv.set_voltage_range(2)
             elif abs_v <= 20:
-                ch.set_voltage_range(20)
+                drv.set_voltage_range(20)
             else:
-                ch.set_voltage_range(200)
+                drv.set_voltage_range(200)
 
-        ch.set_voltage(voltage)
-        ch.set_current_limit(current)
+        # Apply settings
+        if idx is None:
+            # Keithley
+            drv.set_voltage(voltage)
+            drv.set_current_limit(current)
+        else:
+            # TTi
+            drv.set_voltage(voltage, channel=idx)
+            drv.set_current_limit(current, channel=idx)
 
     def readback(self, device_id, channel_id):
         ch = self.devices[device_id].channels[channel_id]
 
-        # not available with output off
-        if int(ch.get_on()) == 0:
+        # Unified ON/OFF detection for both Keithley and TTi
+        if self._get_on(ch) == 0:
             return {"voltage": None, "current": None, "current_limit": None}
 
+        # TTi
+        if isinstance(ch, tuple):
+            drv, idx = ch
+            v = drv.get_voltage(idx)
+            i = drv.get_current(idx)
+            ilim = drv.get_current_limit(idx)
+            return {"voltage": v, "current": i, "current_limit": ilim}
+
+        # Keithley
         try:
-            raw = ch.get_current()  # returns something like voltage, current, ...
+            raw = ch.get_current()
             parts = str(raw).split(",")
             val_i = float(parts[1]) if parts else None
             val_v = float(parts[0]) if parts else None
@@ -153,3 +176,19 @@ class PowerSupplyManager:
             val_ilim = None
 
         return {"voltage": val_v, "current": val_i, "current_limit": val_ilim}
+
+    def _get_on(self, ch):
+        # Keithley: channel object with real get_on()
+        if not isinstance(ch, tuple):
+            try:
+                return int(ch.get_on())
+            except Exception:
+                return 0
+
+        # TTi: tuple (driver, idx)
+        drv, idx = ch
+        ret = drv.ask(f"OP{idx}?")
+        try:
+            return int(ret.strip())
+        except Exception:
+            return 0

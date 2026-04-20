@@ -20,7 +20,7 @@ yaml = "mantis/power_devices/keithley2400_pyserial.yaml"
 connection = "port=/dev/ttyUSB0"
 channels = 1
 comment = "High voltage supply W18R05"
-max_voltage = 10
+# max_voltage = 10
 max_current = 0.001
 ocp = true
 
@@ -30,20 +30,21 @@ yaml = "mantis/power_devices/keithley2410_pyserial.yaml"
 connection = "port=/dev/ttyUSB1"
 channels = 1
 comment = "High voltage supply W14R13"
-max_voltage = 10
+# max_voltage = 10
 max_current = 0.001
 ocp = true
 
-# [powering.devices.tti]
-# name = "TTI QL355TP"
-# yaml = "mantis/power_devices/ttiql355tp.yaml"
-# comment = ""
-# channels = 3
+[powering.devices.tti]
+name = "TTI QL355TP"
+yaml = "mantis/power_devices/ttiql355tp.yaml"
+connection = "port=/dev/ttyACM0"
+comment = ""
+channels = 3
 
-# [powering.devices.tti.channel_comments]
-# ch1 = "Psub/Pwell for detector XY"
-# ch2 = "Power supply for BQAD board"
-# ch3 = "Psub/Pwell for detector XY"
+[powering.devices.tti.channel_comments]
+CH0 = "Psub/Pwell for detector W18R05"
+CH1 = "Psub/Pwell for detector W14R13"
+CH2 = "Power supply for BQAD board"
 
 [modules]
 [modules.module_0]

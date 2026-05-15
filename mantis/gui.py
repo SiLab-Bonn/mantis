@@ -574,6 +574,23 @@ class Powering(QWidget):
                 lbl_v.setText(self.format_value(rb["voltage"], "V"))
                 lbl_i.setText(self.format_value(rb["current"], "A"))
                 lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
+        if hasattr(self.TJ, "main_window") and self.TJ.main_window is not None:
+            summary = []
+
+            for (dev_id, ch_id), (
+                lbl_v,
+                lbl_i,
+                lbl_ilim,
+            ) in self.readback_labels.items():
+                device = self.manager.devices[dev_id]
+
+                rb = self.manager.readback(dev_id, ch_id)
+                v = self.format_value(rb["voltage"], "V")
+                i = self.format_value(rb["current"], "A")
+
+                summary.append(f"{device.name} / {ch_id}\n  V={v}\n  I={i}\n")
+
+            self.TJ.main_window.currentbar_readback.setText("\n".join(summary))
 
 
 class MonitorView(QWidget):
@@ -623,6 +640,7 @@ class MonitorView(QWidget):
         selector_row = QHBoxLayout()
         self.detA = QComboBox()
         self.detB = QComboBox()
+        # self.counter_row_corr = QHBoxLayout()
 
         selector_row.addWidget(QLabel("Detector A:"))
         selector_row.addWidget(self.detA)
@@ -662,14 +680,9 @@ class MonitorView(QWidget):
         layout = QGridLayout()
         images = []
 
-        ticks = [0, 112, 224, 336, 448, 512]
-
         for i in range(nplots):
             view = pg.GraphicsLayoutWidget()
             plot = view.addPlot()
-
-            plot.getAxis("bottom").setTicks([[(t, str(t)) for t in ticks]])
-            plot.getAxis("left").setTicks([[(t, str(t)) for t in ticks]])
 
             plot.setXRange(0, 512)
             plot.setYRange(0, 512)
@@ -913,6 +926,7 @@ class MainWindow(QWidget):
     def __init__(self, controller, power_manager):
         super().__init__()
         self.TJ = controller
+        controller.main_window = self
         self.power_manager = power_manager
         self.button_manager = ButtonManager()
 
@@ -945,12 +959,6 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         self.sidebar_layout = QVBoxLayout()
 
-        # Toggle button
-        self.toggle_btn = ButtonManager.StyledButton("⮜", color="lightblue")
-        self.toggle_btn.setFixedHeight(30)
-        self.toggle_btn.clicked.connect(self.toggle_sidebar)
-        self.sidebar_layout.addWidget(self.toggle_btn)
-
         # Sidebar buttons
         for *_, widget in pages:
             self.stack.addWidget(widget)
@@ -960,18 +968,21 @@ class MainWindow(QWidget):
             [page[0:-1] for page in pages], target=self, layout=self.sidebar_layout
         )
 
-        self.sidebar_layout.addStretch()
-
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setLayout(self.sidebar_layout)
         self.sidebar_widget.setFixedWidth(150)
 
-        # Vertical separator
+        self.currentbar_readback = QLabel()
+        self.currentbar_readback.setFixedWidth(150)
+
+        self.sidebar_layout.addSpacing(20)
+        self.sidebar_layout.addWidget(self.currentbar_readback)
+        self.sidebar_layout.addStretch()
+
         line = QFrame()
         line.setFrameShape(QFrame.Shape.VLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
 
-        # Main layout
         layout = QHBoxLayout()
         layout.addWidget(self.sidebar_widget)
         layout.addWidget(line)
@@ -979,23 +990,6 @@ class MainWindow(QWidget):
 
         self.setLayout(layout)
         self.setWindowTitle("MANTIS Control")
-
-        self.sidebar_collapsed = False
-        self.sidebar_width = 150
-
-    def toggle_sidebar(self):
-        if self.sidebar_collapsed:
-            self.sidebar_widget.setFixedWidth(self.sidebar_width)
-            self.toggle_btn.setText("⮜")
-            for btn in self.sidebar_buttons.values():
-                btn.show()
-            self.sidebar_collapsed = False
-        else:
-            self.sidebar_widget.setFixedWidth(40)
-            self.toggle_btn.setText("⮞")
-            for btn in self.sidebar_buttons.values():
-                btn.hide()
-            self.sidebar_collapsed = True
 
 
 def main():

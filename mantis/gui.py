@@ -773,16 +773,16 @@ class MonitorView(QWidget):
             return
 
         new_key = (min(a, b), max(a, b))
-        self.current_corr_key = new_key
 
-        # Tell backend which pair to correlate
-        self.monitor.active_corr_key = new_key
+        if new_key != self.current_corr_key:
+            self.current_corr_key = new_key
+            self.monitor.active_corr_key = new_key
 
-        # Reset only this pair
-        h = self.monitor.hit_corr[new_key]
-        h["col_col"].fill(0)
-        h["row_row"].fill(0)
-        self.monitor.total_correlations = 0
+            h = self.monitor.hit_corr[new_key]
+            h["col_col"].fill(0)
+            h["row_row"].fill(0)
+
+            self.monitor.total_correlations[new_key] = 0
 
     def monitor_loop(self):
         while self.monitor._running:

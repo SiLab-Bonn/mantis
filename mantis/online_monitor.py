@@ -44,12 +44,12 @@ def correlate_hits_numba(
 class OnlineMonitor:
     def __init__(self, config_file):
         self.config_file = config_file
+        self.active_corr_key = None
 
         self.frontends, self.rx_ids, self.chip_sn = self.load_config()
         self.num_chips = len(self.frontends)
 
         self.received_data = [None] * self.num_chips
-
         self.total_occupancy = [None] * self.num_chips
         self.last_packet_timestamp = [None] * self.num_chips
         self.last_hits = [None] * self.num_chips
@@ -68,6 +68,8 @@ class OnlineMonitor:
                     "col_col": np.zeros((512, 512), dtype=np.uint32),
                     "row_row": np.zeros((512, 512), dtype=np.uint32),
                 }
+
+        self.total_correlations = {key: 0 for key in self.hit_corr}
 
         self._running = False
         self.receivers = []
@@ -142,13 +144,11 @@ class OnlineMonitor:
     def make_hitmap(self, raw_data, rx_id, interpreter):
         raw_data = raw_data.astype(np.uint32, copy=False)
 
-        # interpreter.reset()
         hit_buffer = np.zeros(4 * len(raw_data), dtype=hit_dtype)
 
         hits = interpreter.interpret(raw_data, hit_buffer)
         occ = interpreter.get_occ()
 
-        # hits = hit_buffer
         return occ, hits
 
     def process_receiver(self, list_index):
@@ -174,38 +174,46 @@ class OnlineMonitor:
         self.last_hits[list_index] = hits
         self.total_hits[list_index] += hits.shape[0]
 
-        if ts is not None:
-            for other in range(self.num_chips):
-                if other == list_index:
-                    continue
+        # only correlate the currently selected detector pair
+        if self.active_corr_key is None:
+            return self.total_occupancy[list_index]
 
-                other_ts = self.last_packet_timestamp[other]
-                other_hits = self.last_hits[other]
+        i, j = self.active_corr_key
 
-                if other_ts is None or other_hits is None:
-                    continue
+        if list_index not in (i, j):
+            return self.total_occupancy[list_index]
 
-                pair_id = (min(list_index, other), max(list_index, other), ts, other_ts)
+        # determine ref/dut ordering
+        if list_index == i:
+            ref_hits = hits
+            dut_hits = self.last_hits[j]
+        else:
+            ref_hits = hits
+            dut_hits = self.last_hits[i]
 
-                # skip already correlated pairs
-                if pair_id in self.last_correlated_pairs:
-                    continue
+        if dut_hits is None or ref_hits is None:
+            return self.total_occupancy[list_index]
 
-                key = (min(list_index, other), max(list_index, other))
-                h = self.hit_corr[key]
+        ref_ts = ref_hits["timestamp"]
+        dut_ts = dut_hits["timestamp"]
 
-                self.correlate_hits(
-                    hits["col"],
-                    hits["row"],
-                    hits["timestamp"],
-                    other_hits["col"],
-                    other_hits["row"],
-                    other_hits["timestamp"],
-                    h["col_col"],
-                    h["row_row"],
-                )
+        if ref_ts.size == 0 or dut_ts.size == 0:
+            return self.total_occupancy[list_index]
 
-                self.last_correlated_pairs.add(pair_id)
+        # histograms_for_selected_pair = all_histograms[(detA, detB)]
+        h = self.hit_corr[self.active_corr_key]
+
+        self.correlate_hits(
+            ref_hits["col"],
+            ref_hits["row"],
+            ref_ts,
+            dut_hits["col"],
+            dut_hits["row"],
+            dut_ts,
+            h["col_col"],
+            h["row_row"],
+            key=self.active_corr_key,
+        )
 
         return self.total_occupancy[list_index]
 
@@ -219,7 +227,8 @@ class OnlineMonitor:
         dut_ts,
         x_hist,
         y_hist,
-        dt=50,
+        dt=10,
+        key=None,
     ):
         if ref_cols.size == 0 or dut_cols.size == 0:
             return
@@ -227,6 +236,7 @@ class OnlineMonitor:
         correlate_hits_numba(
             ref_cols, ref_rows, ref_ts, dut_cols, dut_rows, dut_ts, x_hist, y_hist, dt
         )
+        self.total_correlations[key] = y_hist.sum()
 
     def masking(self, chip_index):
         occ = self.total_occupancy[chip_index]

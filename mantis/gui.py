@@ -597,6 +597,7 @@ class MonitorView(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.TJ = controller
+        self.button_manager = ButtonManager()
         self.thread_manager = ThreadManager(Messages(lambda text: None, lambda: False))
 
         layout = QVBoxLayout()
@@ -640,19 +641,31 @@ class MonitorView(QWidget):
         selector_row = QHBoxLayout()
         self.detA = QComboBox()
         self.detB = QComboBox()
-        # self.counter_row_corr = QHBoxLayout()
-
         selector_row.addWidget(QLabel("Detector A:"))
         selector_row.addWidget(self.detA)
         selector_row.addWidget(QLabel("Detector B:"))
         selector_row.addWidget(self.detB)
 
+        # fmt: off
+        button_specs = [
+            ("btn_apply_corr", "Apply", "green", self.update_corr_key, "", True),
+        ]
+        # fmt: on
+        self.button_manager.make(
+            button_specs,
+            target=self,
+            layout=selector_row,
+            thread_manager=self.thread_manager,
+        )
         self.page_corr_layout.addLayout(selector_row)
 
         # Correlation plots
         corr_layout, corr_imgs = self.create_pg_grid(2, ["Col–Col", "Row–Row"])
         self.col_img, self.row_img = corr_imgs
         self.page_corr_layout.addLayout(corr_layout)
+
+        self.corr_counter_row = QHBoxLayout()
+        self.page_corr_layout.addLayout(self.corr_counter_row)
 
         tabs.addTab(page_corr, "Correlations")
 
@@ -669,7 +682,7 @@ class MonitorView(QWidget):
         # GUI refresh timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_all)
-        self.timer.start(200)
+        self.timer.start(500)
 
     def create_pg_grid(self, nplots, titles):
         pg.setConfigOption("background", "w")  # white background
@@ -743,13 +756,33 @@ class MonitorView(QWidget):
 
         self.update_corr_key()
 
+        # Rebuild counters
+        for self.corr_lbl in getattr(self, "corr_hit_labels", []):
+            self.corr_lbl.deleteLater()
+
+        self.corr_hit_labels = []
+        self.corr_lbl = QLabel("0 correlated hits")
+        self.corr_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.corr_hit_labels.append(self.corr_lbl)
+        self.corr_counter_row.addWidget(self.corr_lbl)
+
     def update_corr_key(self):
         a = self.detA.currentData()
         b = self.detB.currentData()
         if a is None or b is None or a == b:
             return
 
-        self.current_corr_key = (min(a, b), max(a, b))
+        new_key = (min(a, b), max(a, b))
+
+        if new_key != self.current_corr_key:
+            self.current_corr_key = new_key
+            self.monitor.active_corr_key = new_key
+
+            h = self.monitor.hit_corr[new_key]
+            h["col_col"].fill(0)
+            h["row_row"].fill(0)
+
+            self.monitor.total_correlations[new_key] = 0
 
     def monitor_loop(self):
         while self.monitor._running:
@@ -796,6 +829,10 @@ class MonitorView(QWidget):
             self.row_img.setImage(row_corr, autoLevels=False)
             self.row_img.setLevels([0, 20])
 
+            # Update hit counter
+            corr_hits = self.monitor.total_correlations[self.current_corr_key]
+            self.corr_lbl.setText(f"{corr_hits} correlated hits")
+
     def reset(self):
         self.monitor.reset_occupancy()
 
@@ -808,6 +845,7 @@ class MonitorView(QWidget):
 
         for lbl, name in zip(self.hit_labels, self.monitor.chip_sn):
             lbl.setText(f"{name}: 0 hits")
+        self.monitor.total_correlations[self.current_corr_key] = 0
 
     def masking(self):
         if self.cb_mask.isChecked():

@@ -1,5 +1,5 @@
 [general]
-output_directory = "/mnt/data/test"
+output_directory = "data"
 
 [scan_configuration]
 start_column = 0

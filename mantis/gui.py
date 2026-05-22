@@ -546,18 +546,17 @@ class Powering(QWidget):
             (ch.on if state else ch.off)()
 
     def _poll_all_devices(self):
-        data = {
-            dev_id: {
-                ch_id: self.manager.readback(dev_id, ch_id)
-                for ch_id in dev.channels.keys()
+        while True:
+            data = {
+                dev_id: {
+                    ch_id: self.manager.readback(dev_id, ch_id)
+                    for ch_id in dev.channels.keys()
+                }
+                for dev_id, dev in self.manager.devices.items()
             }
-            for dev_id, dev in self.manager.devices.items()
-        }
 
-        self.append_text.emit("__UPDATE_READBACK__" + repr(data))
-
-        time.sleep(0.5)
-        self.thread_manager.run_in_thread(self._poll_all_devices)
+            self.append_text.emit("__UPDATE_READBACK__" + repr(data))
+            time.sleep(0.5)  # 500 ms Polling
 
     def _handle_append_text(self, text):
         if text.startswith("__UPDATE_READBACK__"):
@@ -568,26 +567,24 @@ class Powering(QWidget):
             self.terminal.appendPlainText(text)
 
     def _update_all_readbacks(self, data):
-        for dev_id, channels in data.items():
-            for ch_id, rb in channels.items():
-                lbl_v, lbl_i, lbl_ilim = self.readback_labels[(dev_id, ch_id)]
-                lbl_v.setText(self.format_value(rb["voltage"], "V"))
-                lbl_i.setText(self.format_value(rb["current"], "A"))
-                lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
+        for (dev_id, ch_id), (lbl_v, lbl_i, lbl_ilim) in self.readback_labels.items():
+            rb = data.get(dev_id, {}).get(ch_id, None)
+            if rb is None:
+                lbl_v.setText("—")
+                lbl_i.setText("—")
+                lbl_ilim.setText("—")
+                continue
+
+            lbl_v.setText(self.format_value(rb["voltage"], "V"))
+            lbl_i.setText(self.format_value(rb["current"], "A"))
+            lbl_ilim.setText(self.format_value(rb["current_limit"], "A"))
+
         if hasattr(self.TJ, "main_window") and self.TJ.main_window is not None:
             summary = []
-
-            for (dev_id, ch_id), (
-                lbl_v,
-                lbl_i,
-                lbl_ilim,
-            ) in self.readback_labels.items():
+            for (dev_id, ch_id), (lbl_v, lbl_i, _) in self.readback_labels.items():
                 device = self.manager.devices[dev_id]
-
-                rb = self.manager.readback(dev_id, ch_id)
-                v = self.format_value(rb["voltage"], "V")
-                i = self.format_value(rb["current"], "A")
-
+                v = lbl_v.text()
+                i = lbl_i.text()
                 summary.append(f"{device.name} / {ch_id}\n  V={v}\n  I={i}\n")
 
             self.TJ.main_window.currentbar_readback.setText("\n".join(summary))

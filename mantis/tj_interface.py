@@ -55,6 +55,7 @@ class TJ_Control:
     def load_config(self):
         self.testbench = load_merged_config(FIXED_CONFIG_FILE, self.user_config_file)
         self.scan_conf = self.testbench["scan_configuration"]
+        self.daq_conf = self.testbench['general']['daq_conf']
 
     def initialize(self):
         self.shutdown()
@@ -62,7 +63,7 @@ class TJ_Control:
 
         try:
             self.scan_ext = self.scan_type(
-                bench_config=self.testbench, scan_config=self.scan_conf
+                bench_config=self.testbench, scan_config=self.scan_conf, daq_conf=self.daq_conf
             )
         except Exception as e:
             print("Initialization failed:", e)

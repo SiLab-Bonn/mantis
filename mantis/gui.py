@@ -921,6 +921,7 @@ class Configuration(QWidget):
             self.editor.setPlainText(text)
             self.current_path = path
             self.original_text = text
+            self.TJ.user_config_file = path
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")

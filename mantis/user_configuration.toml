@@ -1,5 +1,6 @@
 [general]
 output_directory = "data"
+# daq_conf = 'path_to_bdaq53.yaml'
 
 [scan_configuration]
 start_column = 0

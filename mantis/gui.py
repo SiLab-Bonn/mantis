@@ -104,6 +104,17 @@ class ButtonManager:
             layout.addWidget(btn)
 
 
+class Redirect:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def write(self, text):
+        self.callback(text)
+
+    def flush(self):
+        pass
+
+
 class QtLogHandler(logging.Handler):
     def __init__(self, gui):
         super().__init__()
@@ -294,7 +305,8 @@ class ScanControl(QWidget):
         self.setLayout(layout)
 
         self.append_text.connect(self.terminal.appendPlainText)
-        sys.stdout = self
+        sys.stdout = Redirect(self.messages.route_stdout_like)
+        sys.stderr = Redirect(self.messages.route_stdout_like)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_gui)

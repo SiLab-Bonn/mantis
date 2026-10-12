@@ -1,13 +1,11 @@
 import toml
 from pathlib import Path
-from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
+import tjmonopix2.scans.scan_ext_trigger as extscan
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 FIXED_CONFIG_FILE = BASE_DIR / "fixed_configuration.toml"
 USER_CONFIG_FILE = BASE_DIR / "user_configuration.toml"
-
-scan_type = ExtTriggerScan
 
 
 def load_merged_config(fixed_file, user_file):
@@ -37,7 +35,7 @@ def load_merged_config(fixed_file, user_file):
 
 
 class TJ_Control:
-    def __init__(self, user_config_file=None, scan_type=ExtTriggerScan):
+    def __init__(self, user_config_file=None, scan_type=extscan.ExtTriggerScan):
         # Always resolve the main config file ONCE
         if user_config_file is None:
             self.main_config_file = USER_CONFIG_FILE
@@ -55,7 +53,10 @@ class TJ_Control:
     def load_config(self):
         self.testbench = load_merged_config(FIXED_CONFIG_FILE, self.user_config_file)
         self.scan_conf = self.testbench["scan_configuration"]
-        self.daq_conf = self.testbench["general"]["daq_conf"]
+        try:
+            self.daq_conf = self.testbench["general"]["daq_conf"]
+        except KeyError:
+            self.daq_conf = Path(extscan.__file__).resolve().parent.parent / "system"
 
     def initialize(self):
         self.shutdown()

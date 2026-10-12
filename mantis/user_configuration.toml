@@ -1,6 +1,6 @@
 [general]
 output_directory = "data"
-# daq_conf = 'path_to_bdaq53.yaml'
+# daq_conf = # '<path-to>bdaq53.yaml'
 
 [scan_configuration]
 start_column = 0
@@ -17,7 +17,7 @@ max_triggers = false # Number of maximum received triggers after stopping readou
 
 [powering.devices.keithley2400]
 name = "Keithley2400"
-yaml = "mantis/power_devices/keithley2400_pyserial.yaml"
+# yaml = "<path-to>keithley2400.yaml"
 connection = "port=/dev/ttyUSB0"
 channels = 1
 comment = "High voltage supply W18R05"
@@ -27,7 +27,7 @@ ocp = true
 
 [powering.devices.keithley2410]
 name = "Keithley2410"
-yaml = "mantis/power_devices/keithley2410_pyserial.yaml"
+# yaml = "<path-to>keithley2410.yaml"
 connection = "port=/dev/ttyUSB1"
 channels = 1
 comment = "High voltage supply W14R13"
@@ -35,14 +35,14 @@ comment = "High voltage supply W14R13"
 max_current = 0.001
 ocp = true
 
-[powering.devices.tti]
+[powering.devices.ttiql355tp]
 name = "TTI QL355TP"
-yaml = "mantis/power_devices/ttiql355tp.yaml"
+# yaml = "<path-to>ttiql355tp.yaml"
 connection = "port=/dev/ttyACM0"
 comment = ""
 channels = 3
 
-[powering.devices.tti.channel_comments]
+[powering.devices.ttiql355tp.channel_comments]
 CH0 = "Psub/Pwell for detector W18R05"
 CH1 = "Psub/Pwell for detector W14R13"
 CH2 = "Power supply for BQAD board"

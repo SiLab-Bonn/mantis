@@ -1,6 +1,11 @@
 import yaml
 import toml
 from basil.dut import Dut
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+POWER_CONFIGS = BASE_DIR / "power_devices"
 
 
 class PowerDevice:
@@ -32,8 +37,13 @@ class PowerSupplyManager:
         entries = cfg.get("powering", {}).get("devices", {})
 
         for device_id, entry in entries.items():
-            with open(entry["yaml"], "r") as f:
-                yaml_data = yaml.safe_load(f)
+            try:
+                with open(entry["yaml"], "r") as f:
+                    yaml_data = yaml.safe_load(f)
+            except KeyError:
+                default_path = POWER_CONFIGS / str(device_id + ".yaml")
+                with open(default_path, "r") as f:
+                    yaml_data = yaml.safe_load(f)
 
             conn = self.parse_connection_string(entry.get("connection", ""))
             if "transfer_layer" in yaml_data:

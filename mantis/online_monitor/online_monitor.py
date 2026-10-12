@@ -3,8 +3,8 @@ import toml
 import numpy as np
 from numba import njit
 
-from mantis.receiver import TJReceiver
-from mantis.mini_interpreter import RawDataInterpreter
+from mantis.online_monitor.receiver import TJReceiver
+from mantis.online_monitor.mini_interpreter import RawDataInterpreter
 
 hit_dtype = np.dtype(
     [

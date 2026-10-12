@@ -127,7 +127,6 @@ class OnlineMonitor:
 
         for r in self.receivers:
             try:
-                # adapt to your TJReceiver API if different
                 if hasattr(r, "stop"):
                     r.stop()
                 if hasattr(r, "close"):

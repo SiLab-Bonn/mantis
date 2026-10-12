@@ -15,7 +15,8 @@ authors = [
 ]
 dependencies = [
     "toml",
-    "PyQt6"
+    "PyQt6",
+    "pyserial"
 ]
 
 

@@ -18,9 +18,9 @@ max_triggers = false # Number of maximum received triggers after stopping readou
 [powering.devices.keithley2400]
 name = "Keithley2400"
 # yaml = "<path-to>keithley2400.yaml"
-connection = "port=/dev/ttyUSB0"
+connection = "port=</dev/set-correct-port>"
 channels = 1
-comment = "High voltage supply W18R05"
+comment = "High voltage supply W00R00"
 # max_voltage = 10
 max_current = 0.001
 ocp = true
@@ -28,9 +28,9 @@ ocp = true
 [powering.devices.keithley2410]
 name = "Keithley2410"
 # yaml = "<path-to>keithley2410.yaml"
-connection = "port=/dev/ttyUSB1"
+connection = "port=</dev/set-correct-port>"
 channels = 1
-comment = "High voltage supply W14R13"
+comment = "High voltage supply W00R00"
 # max_voltage = 10
 max_current = 0.001
 ocp = true
@@ -38,20 +38,20 @@ ocp = true
 [powering.devices.ttiql355tp]
 name = "TTI QL355TP"
 # yaml = "<path-to>ttiql355tp.yaml"
-connection = "port=/dev/ttyACM0"
+connection = "port=</dev/set-correct-port>"
 comment = ""
 channels = 3
 
 [powering.devices.ttiql355tp.channel_comments]
-CH0 = "Psub/Pwell for detector W18R05"
-CH1 = "Psub/Pwell for detector W14R13"
+CH0 = "Psub/Pwell for detector W00R00"
+CH1 = "Psub/Pwell for detector W00R00"
 CH2 = "Power supply for BQAD board"
 
 [modules]
 [modules.module_0]
 identifier = "unknown"
 [modules.module_0.chip_0]
-chip_sn = "W18R05"
+chip_sn = "W00R00"
 chip_id = 0
 receiver = "rx0"
 chip_config_file = "" # If defined: use config from in file (either .cfg.yaml or .h5). If not defined use chip config of latest scan and std. config if no previous scan exists
@@ -59,22 +59,8 @@ send_data = "tcp://127.0.0.1:5500"
 
 # Example for adding more chips:
 [modules.module_0.chip_1]
-chip_sn = "W14R13"
+chip_sn = "W00R00"
 chip_id = 1
 receiver = "rx1"
 chip_config_file = ""
 send_data = "tcp://127.0.0.1:6500"
-
-# [modules.module_0.chip_2]
-# chip_sn = "W18R05"
-# chip_id = 0
-# receiver = "rx3"
-# chip_config_file = ""
-# send_data = "tcp://127.0.0.1:7500"
-
-# [modules.module_0.chip_3]
-# chip_sn = "W14R13"
-# chip_id = 1
-# receiver = "rx3"
-# chip_config_file = ""
-# send_data = "tcp://127.0.0.1:8500"

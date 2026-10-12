@@ -2,7 +2,7 @@ import toml
 from pathlib import Path
 from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 FIXED_CONFIG_FILE = BASE_DIR / "fixed_configuration.toml"
 USER_CONFIG_FILE = BASE_DIR / "user_configuration.toml"

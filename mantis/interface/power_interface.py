@@ -71,11 +71,9 @@ class PowerSupplyManager:
                 driver_type = dut._conf["hw_drivers"][0]["type"].lower()
 
                 if driver_type.startswith("tti"):
-                    # TTi QL355TP → keine Channel-Objekte, 1‑based API
                     for ch in range(nch):
                         channels[f"CH{ch}"] = (driver, ch + 1)
                 else:
-                    # Keithley & andere → unverändert
                     if nch == 1:
                         channels["CH0"] = driver
                     else:
@@ -150,7 +148,6 @@ class PowerSupplyManager:
     def readback(self, device_id, channel_id):
         ch = self.devices[device_id].channels[channel_id]
 
-        # Unified ON/OFF detection for both Keithley and TTi
         if self._get_on(ch) == 0:
             return {"voltage": None, "current": None, "current_limit": None}
 
@@ -182,14 +179,12 @@ class PowerSupplyManager:
         return {"voltage": val_v, "current": val_i, "current_limit": val_ilim}
 
     def _get_on(self, ch):
-        # Keithley: channel object with real get_on()
         if not isinstance(ch, tuple):
             try:
                 return int(ch.get_on())
             except Exception:
                 return 0
 
-        # TTi: tuple (driver, idx)
         drv, idx = ch
         ret = drv.ask(f"OP{idx}?")
         try:

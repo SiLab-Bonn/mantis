@@ -55,7 +55,7 @@ class TJ_Control:
     def load_config(self):
         self.testbench = load_merged_config(FIXED_CONFIG_FILE, self.user_config_file)
         self.scan_conf = self.testbench["scan_configuration"]
-        self.daq_conf = self.testbench['general']['daq_conf']
+        self.daq_conf = self.testbench["general"]["daq_conf"]
 
     def initialize(self):
         self.shutdown()
@@ -63,7 +63,9 @@ class TJ_Control:
 
         try:
             self.scan_ext = self.scan_type(
-                bench_config=self.testbench, scan_config=self.scan_conf, daq_conf=self.daq_conf
+                bench_config=self.testbench,
+                scan_config=self.scan_conf,
+                daq_conf=self.daq_conf,
             )
         except Exception as e:
             print("Initialization failed:", e)
@@ -81,16 +83,26 @@ class TJ_Control:
             if hasattr(self.scan_ext, "_init_environment"):
                 self.scan_ext._init_environment()
 
+            print("DEBUG: Initialized DAQ:", self.scan_ext.daq)
+
+            print("DEBUG: _init_environment complete")
+
             if hasattr(self.scan_ext, "_init_hardware"):
                 self.scan_ext._init_hardware(force=False)
+
+            print("DEBUG: _init_hardware complete")
 
             self.scan_ext.initialized = True
 
             if hasattr(self.scan_ext, "configuration"):
                 self.scan_ext.configuration["scan"] = self.scan_conf
 
+            print("DEBUG: configuration complete")
+
             if hasattr(self.scan_ext, "configure"):
                 self.scan_ext.configure()
+
+            print("DEBUG: configure complete")
 
         except Exception as e:
             print("Configuration failed:", e)

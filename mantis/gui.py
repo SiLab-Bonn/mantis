@@ -1,9 +1,3 @@
-# Graphical user interface
-
-# pyQT6 similar to online monitor
-# buttons to click (start, configure, stop, restart, power cycle) and live plots to admire (hitmap, correlation...)
-# data is should be handled separately to gui in some kind of interpreter
-
 import numpy as np
 import math
 import sys
@@ -33,9 +27,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from mantis.tj_interface import TJ_Control
-from mantis.online_monitor import OnlineMonitor
-from mantis.power_interface import PowerSupplyManager
+from mantis.interface.tj_interface import TJ_Control
+from mantis.online_monitor.online_monitor import OnlineMonitor
+from mantis.interface.power_interface import PowerSupplyManager
 import pyqtgraph as pg
 
 from tjmonopix2.scans.scan_ext_trigger import ExtTriggerScan

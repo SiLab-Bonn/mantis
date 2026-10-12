@@ -289,6 +289,7 @@ class ScanControl(QWidget):
 
         self.append_text.connect(self.terminal.appendPlainText)
         sys.stdout = self
+        sys.stderr = self
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_gui)

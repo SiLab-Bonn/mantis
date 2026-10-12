@@ -5,6 +5,7 @@ Monopix-bAsed Next generation Tracking Instrumentation System
 MANTIS provides a graphical user interface for operating and monitoring the TJ-Monopix2 telescope.
 It is designed to offer an intuitive workflow for data acquisition, configuration, and live visualization.
 
+For more information about MANTIS take a look at the [wiki](https://github.com/SiLab-Bonn/mantis/wiki/MANTIS).
 
 # Installation
 
@@ -36,6 +37,10 @@ Launch the graphical user interface with:
 mantisgui
 
 ```
+
+## Configuration
+
+Change the [user configuration](https://github.com/SiLab-Bonn/mantis/blob/main/mantis/user_configuration.toml) to reflect your setup.
 
 
 # Remote access
